@@ -48,12 +48,15 @@ private partial def makePattern (variables : Array (FVarId × Ident)) (expr : Ex
   let pattern ← `(@$(mkIdent head):ident $patterns:term*)
   return ⟨pattern, used⟩
 
-private def makeRule (decl : Name) : MetaM (TSyntax ``Lean.Parser.Term.matchAlt) := do
+private def makeRule (relation : Name) (decl : Name) : MetaM (TSyntax ``Lean.Parser.Term.matchAlt) := do
   let .thmInfo theoremInfo ← getConstInfo decl
     | throwError "@[uplc_rule] requires a theorem"
   forallTelescope theoremInfo.type fun binders conclusion => do
-    unless conclusion.isAppOfArity `UplcOptimizer.CekJoin 2 do
-      throwError "@[uplc_rule] theorem must conclude CekJoin lhs rhs"
+    unless conclusion.isAppOfArity relation 2 do
+      if relation == `UplcOptimizer.CekJoin then
+        throwError "@[uplc_rule] theorem must conclude CekJoin lhs rhs"
+      else
+        throwError "@[uplc_deep_rule] theorem must conclude StepRule lhs rhs"
     let lhs := conclusion.getAppArgs[0]!
     let .const root _ := lhs.getAppFn
       | throwError "@[uplc_rule] requires a constructor at the head of its left-hand side"
@@ -84,28 +87,34 @@ variables. Additional premises must be decidable from those variables. -/
 initialize uplcRuleAttr : TagAttribute ←
   registerTagAttribute `uplc_rule "register a CEK-checked UPLC rewrite theorem"
     (fun decl => do
-      discard <| MetaM.run' (makeRule decl)
+      discard <| MetaM.run' (makeRule `UplcOptimizer.CekJoin decl)
       if (← collectAxioms decl).contains ``sorryAx then
         throwError "@[uplc_rule] theorem depends on sorryAx")
 
-private def taggedDeclarations (env : Environment) : Array Name := Id.run do
-  let mut names := (uplcRuleAttr.ext.getState env).toArray
+/-- Tag a theorem proving a positive local CEK transition for the deep pass. -/
+initialize uplcDeepRuleAttr : TagAttribute ←
+  registerTagAttribute `uplc_deep_rule "register a UPLC head reduction for the verified traversal"
+    (fun decl => do
+      discard <| MetaM.run' (makeRule `UplcOptimizer.Deep.StepRule decl)
+      if (← collectAxioms decl).contains ``sorryAx then
+        throwError "@[uplc_deep_rule] theorem depends on sorryAx")
+
+private def taggedDeclarations (attr : TagAttribute) (env : Environment) : Array Name := Id.run do
+  let mut names := (attr.ext.getState env).toArray
   for moduleName in env.allImportedModuleNames do
     if let some index := env.getModuleIdx? moduleName then
-      names := names ++ uplcRuleAttr.ext.getModuleEntries env index
+      names := names ++ attr.ext.getModuleEntries env index
   return names.qsort Name.quickLt
 
-/-- Try the visible tagged theorems in deterministic Lean name order. The first
-matching rule with satisfied premises returns its replacement and CEK proof. -/
-elab "def_uplc_rules " name:ident : command => do
-  let rules := taggedDeclarations (← getEnv)
+private def defineRules (attr : TagAttribute) (relationName : Name) (name : Ident) : CommandElabM Unit := do
+  let rules := taggedDeclarations attr (← getEnv)
   let alternatives : Array (TSyntax ``matchAlt) ← liftTermElabM do
     rules.mapM fun decl => do
-      return (← makeRule decl)
+      return (← makeRule relationName decl)
   let fallback ← `(matchAltExpr| | _ => none)
   let term := mkIdent `term
   let termType := mkIdent ``PlutusCore.UPLC.Term.Term
-  let relation := mkIdent `UplcOptimizer.CekJoin
+  let relation := mkIdent relationName
   let motive ← `((candidate : $termType) → Option { result : $termType // $relation candidate result })
   let mut matcher ← `(none)
   for alternative in alternatives.reverse do
@@ -114,5 +123,13 @@ elab "def_uplc_rules " name:ident : command => do
     matcher ← `($attempt <|> $matcher)
   elabCommand (← `(def $name ($term:ident : $termType) :
     Option { result : $termType // $relation $term:ident result } := $matcher))
+
+/-- Try the visible tagged head-join theorems in deterministic Lean name order. -/
+elab "def_uplc_rules " name:ident : command =>
+  defineRules uplcRuleAttr `UplcOptimizer.CekJoin name
+
+/-- Generate the proof-producing steps of the verified deep optimizer. -/
+elab "def_uplc_deep_rules " name:ident : command =>
+  defineRules uplcDeepRuleAttr `UplcOptimizer.Deep.StepRule name
 
 end UplcOptimizer
