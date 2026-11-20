@@ -32,27 +32,27 @@ theorem ListRel.lookup {α : Type} {R : α → α → Prop} {xs ys : List α}
     | zero => exact .some heads
     | succ idx => exact ih idx
 
-abbrev TermListRel (R : Term → Term → Prop) := ListRel R
+abbrev TermListRel (R : Layout → Term → Term → Prop) (layout : Layout) := ListRel (R layout)
 
-inductive FrameRel (R : Term → Term → Prop) : Frame → Frame → Prop where
+inductive FrameRel (R : Layout → Term → Term → Prop) : Frame → Frame → Prop where
   | force : FrameRel R .ForceFrame .ForceFrame
-  | leftTerm : R term term' → ValueListRel R env env' →
+  | leftTerm : R layout term term' → EnvRel R layout env env' →
       FrameRel R (.LeftApplicationToTerm term env) (.LeftApplicationToTerm term' env')
   | leftValue : ValueRel R value value' →
       FrameRel R (.LeftApplicationToValue value) (.LeftApplicationToValue value')
   | rightValue : ValueRel R value value' →
       FrameRel R (.RightApplicationOfValue value) (.RightApplicationOfValue value')
-  | constructorArgument : ValueListRel R values values' → TermListRel R terms terms' →
-      ValueListRel R env env' →
+  | constructorArgument : ValueListRel R values values' → TermListRel R layout terms terms' →
+      EnvRel R layout env env' →
       FrameRel R (.ConstructorArgument tag values terms env)
         (.ConstructorArgument tag values' terms' env')
-  | caseScrutinee : TermListRel R branches branches' → ValueListRel R env env' →
+  | caseScrutinee : TermListRel R layout branches branches' → EnvRel R layout env env' →
       FrameRel R (.CaseScrutinee branches env) (.CaseScrutinee branches' env')
 
-abbrev StackRel (R : Term → Term → Prop) := ListRel (FrameRel R)
+abbrev StackRel (R : Layout → Term → Term → Prop) := ListRel (FrameRel R)
 
-inductive StateRel (R : Term → Term → Prop) : State → State → Prop where
-  | eval : StackRel R stack stack' → ValueListRel R env env' → R term term' →
+inductive StateRel (R : Layout → Term → Term → Prop) : State → State → Prop where
+  | eval : StackRel R stack stack' → EnvRel R layout env env' → R layout term term' →
       StateRel R (.Eval stack env term) (.Eval stack' env' term')
   | ret : StackRel R stack stack' → ValueRel R value value' →
       StateRel R (.Return stack value) (.Return stack' value')
@@ -60,7 +60,7 @@ inductive StateRel (R : Term → Term → Prop) : State → State → Prop where
   | error : StateRel R .Error .Error
   | budgetExhausted : StateRel R .BudgetExhausted .BudgetExhausted
 
-variable {R : Term → Term → Prop}
+variable {R : Layout → Term → Term → Prop}
 
 private theorem evalBuiltin_related (variant : BuiltinSemanticsVariant) (builtin : BuiltinFun)
     (stacks : StackRel R s t) (values : ValueListRel R xs ys) :
@@ -82,7 +82,7 @@ private theorem apply_related (variant : BuiltinSemanticsVariant) (stacks : Stac
   cases fns with
   | const => exact .error
   | delay => exact .error
-  | lam bodies envs => exact .eval stacks (.cons args envs) bodies
+  | lam bodies envs => exact .eval stacks (envs.push args) bodies
   | constr => exact .error
   | @builtin b xs ys expected values =>
     cases expected with
@@ -121,8 +121,8 @@ private theorem folding_related (stacks : StackRel R s t) (values : ValueListRel
   | .nil => exact stacks
   | .cons heads tail => exact .cons (.leftValue heads) (folding_related stacks tail)
 
-private theorem branch_related (stacks : StackRel R s t) (envs : ValueListRel R e e')
-    (branches : TermListRel R bs bs') (idx : Nat) :
+private theorem branch_related (stacks : StackRel R s t) (envs : EnvRel R layout e e')
+    (branches : TermListRel R layout bs bs') (idx : Nat) :
     StateRel R
       (match bs[idx]? with | some body => .Eval s e body | none => .Error)
       (match bs'[idx]? with | some body => .Eval t e' body | none => .Error) := by
@@ -146,7 +146,7 @@ private theorem literalFields_related (first second : Const) :
   .cons .const (.cons .const .nil)
 
 private theorem case_constant_related (variant : BuiltinSemanticsVariant) (stacks : StackRel R s t)
-    (envs : ValueListRel R e e') (branches : TermListRel R bs bs') (constant : Const) :
+    (envs : EnvRel R layout e e') (branches : TermListRel R layout bs bs') (constant : Const) :
     StateRel R
       (step variant (.Return (.CaseScrutinee bs e :: s) (.VCon constant)))
       (step variant (.Return (.CaseScrutinee bs' e' :: t) (.VCon constant))) := by
@@ -194,7 +194,8 @@ private theorem case_constant_related (variant : BuiltinSemanticsVariant) (stack
   | _ => exact .error
 
 private theorem case_related (variant : BuiltinSemanticsVariant) (stacks : StackRel R s t)
-    (envs : ValueListRel R e e') (branches : TermListRel R bs bs') (values : ValueRel R v w) :
+    (envs : EnvRel R layout e e') (branches : TermListRel R layout bs bs')
+    (values : ValueRel R v w) :
     StateRel R (step variant (.Return (.CaseScrutinee bs e :: s) v))
       (step variant (.Return (.CaseScrutinee bs' e' :: t) w)) := by
   cases values with
@@ -226,18 +227,27 @@ theorem return_step_related (variant : BuiltinSemanticsVariant) (stacks : StackR
     | caseScrutinee branches envs => exact case_related variant stacks envs branches values
 
 theorem eval_var_related (variant : BuiltinSemanticsVariant) (stacks : StackRel R s t)
-    (envs : ValueListRel R e e') (idx : Nat) :
-    StateRel R (step variant (.Eval s e (.Var idx))) (step variant (.Eval t e' (.Var idx))) := by
+    (envs : EnvRel R layout e e') (idx : Nat) :
+    StateRel R (step variant (.Eval s e (.Var idx)))
+      (step variant (.Eval t e' (.Var (layout.rename idx)))) := by
   simp only [step, List.get?Internal_eq_getElem?]
   have related := envs.lookup idx
   generalize e[idx]? = left at related ⊢
-  generalize e'[idx]? = right at related ⊢
+  generalize e'[layout.rename idx]? = right at related ⊢
   cases related with
   | none => exact .error
   | some values => exact .ret stacks values
 
+theorem eval_hoisted_related (variant : BuiltinSemanticsVariant) (stacks : StackRel R s t)
+    (envs : EnvRel R layout e e') (selected : layout.hoistedAt index = some forced) :
+    StateRel R (stepN variant (2 * forced.forces + 1) (.Eval s e forced.term))
+      (step variant (.Eval t e' (.Var index))) := by
+  rw [forced.evaluate]
+  simp only [step, List.get?Internal_eq_getElem?, envs.hoistedLookup selected]
+  exact .ret stacks (.builtin .nil)
+
 theorem eval_constructor_related (variant : BuiltinSemanticsVariant) (stacks : StackRel R s t)
-    (envs : ValueListRel R e e') (fields : TermListRel R xs ys) (tag : Nat) :
+    (envs : EnvRel R layout e e') (fields : TermListRel R layout xs ys) (tag : Nat) :
     StateRel R (step variant (.Eval s e (.Constr tag xs)))
       (step variant (.Eval t e' (.Constr tag ys))) := by
   cases fields with

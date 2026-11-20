@@ -99,7 +99,7 @@ initialize uplcDeepRuleAttr : TagAttribute ←
       if (← collectAxioms decl).contains ``sorryAx then
         throwError "@[uplc_deep_rule] theorem depends on sorryAx")
 
-private def taggedDeclarations (attr : TagAttribute) (env : Environment) : Array Name := Id.run do
+def taggedDeclarations (attr : TagAttribute) (env : Environment) : Array Name := Id.run do
   let mut names := (attr.ext.getState env).toArray
   for moduleName in env.allImportedModuleNames do
     if let some index := env.getModuleIdx? moduleName then

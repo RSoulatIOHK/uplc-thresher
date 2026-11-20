@@ -1,4 +1,4 @@
-import PlutusCore.UPLC.CekMachine
+import UplcOptimizer.DeepScope
 
 namespace UplcOptimizer.Deep
 
@@ -10,29 +10,41 @@ open PlutusCore.UPLC.Term
 
 mutual
   /-- A term correspondence lifted to values and captured environments. -/
-  inductive ValueRel (R : Term → Term → Prop) : CekValue → CekValue → Prop where
+  inductive ValueRel (R : Layout → Term → Term → Prop) : CekValue → CekValue → Prop where
     | const {constant} : ValueRel R (.VCon constant) (.VCon constant)
-    | lam {left right leftEnv rightEnv} : R left right → ValueListRel R leftEnv rightEnv →
+    | lam {layout left right leftEnv rightEnv} :
+        R layout.underBinder left right → EnvRel R layout leftEnv rightEnv →
         ValueRel R (.VLam left leftEnv) (.VLam right rightEnv)
-    | delay {left right leftEnv rightEnv} : R left right → ValueListRel R leftEnv rightEnv →
+    | delay {layout left right leftEnv rightEnv} :
+        R layout left right → EnvRel R layout leftEnv rightEnv →
         ValueRel R (.VDelay left leftEnv) (.VDelay right rightEnv)
     | constr {tag left right} : ValueListRel R left right →
         ValueRel R (.VConstr tag left) (.VConstr tag right)
     | builtin {builtin left right expected} : ValueListRel R left right →
         ValueRel R (.VBuiltin builtin left expected) (.VBuiltin builtin right expected)
 
-  inductive ValueListRel (R : Term → Term → Prop) : List CekValue → List CekValue → Prop where
+  inductive ValueListRel (R : Layout → Term → Term → Prop) : List CekValue → List CekValue → Prop where
     | nil : ValueListRel R [] []
     | cons {left right leftTail rightTail} :
         ValueRel R left right → ValueListRel R leftTail rightTail →
         ValueListRel R (left :: leftTail) (right :: rightTail)
+
+  /-- Align each original environment slot with a target slot, and require
+  every added slot to contain exactly the builtin value declared by its layout. -/
+  inductive EnvRel (R : Layout → Term → Term → Prop) :
+      Layout → List CekValue → List CekValue → Prop where
+    | same : ValueListRel R left right → EnvRel R .same left right
+    | keep : ValueRel R left right → EnvRel R layout leftTail rightTail →
+        EnvRel R (.keep layout) (left :: leftTail) (right :: rightTail)
+    | insert (forced : ForcedBuiltin) : EnvRel R layout left right →
+        EnvRel R (.insert forced layout) left (forced.value :: right)
 end
 
-inductive ValueOptionRel (R : Term → Term → Prop) : Option CekValue → Option CekValue → Prop where
+inductive ValueOptionRel (R : Layout → Term → Term → Prop) : Option CekValue → Option CekValue → Prop where
   | none : ValueOptionRel R none none
   | some {left right} : ValueRel R left right → ValueOptionRel R (some left) (some right)
 
-variable {R : Term → Term → Prop}
+variable {R : Layout → Term → Term → Prop}
 
 theorem ValueListRel.lookup {left right} (related : ValueListRel R left right) (index : Nat) :
     ValueOptionRel R left[index]? right[index]? := by
@@ -61,6 +73,34 @@ theorem ValueListRel.reverse {left right} (related : ValueListRel R left right) 
   | .cons head tail =>
     rw [List.reverse_cons, List.reverse_cons]
     exact tail.reverse.append (.cons head .nil)
+
+theorem EnvRel.push {layout left right x y} (related : EnvRel R layout left right)
+    (heads : ValueRel R x y) : EnvRel R layout.underBinder (x :: left) (y :: right) := by
+  cases related with
+  | same values => exact .same (.cons heads values)
+  | keep values tail => exact .keep heads (.keep values tail)
+  | insert forced tail => exact .keep heads (.insert forced tail)
+
+theorem EnvRel.lookup {layout left right} (related : EnvRel R layout left right) (index : Nat) :
+    ValueOptionRel R left[index]? right[layout.rename index]? := by
+  match related, index with
+  | .same values, idx => exact values.lookup idx
+  | .keep values _, 0 => exact .some values
+  | .keep _ tail, idx + 1 => exact tail.lookup idx
+  | .insert _ tail, idx => exact tail.lookup idx
+
+theorem EnvRel.hoistedLookup {layout left right index forced}
+    (related : EnvRel R layout left right) (selected : layout.hoistedAt index = some forced) :
+    right[index]? = some forced.value := by
+  match related, index with
+  | .same _, _ => simp [Layout.hoistedAt] at selected
+  | .keep _ _, 0 => simp [Layout.hoistedAt] at selected
+  | .keep _ tail, _ + 1 => exact tail.hoistedLookup selected
+  | .insert builtin _, 0 =>
+    change some builtin = some forced at selected
+    cases Option.some.inj selected
+    rfl
+  | .insert _ tail, _ + 1 => exact tail.hoistedLookup selected
 
 private theorem ValueOptionRel.bindSame {α : Type} (input : Option α)
     {left right : α → Option CekValue}

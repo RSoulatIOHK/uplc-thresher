@@ -8,78 +8,95 @@ open PlutusCore.UPLC.CekMachine
 open PlutusCore.UPLC.CekValue
 open PlutusCore.UPLC.Term
 
-private theorem TermsRel.toListRel (related : TermsRel lhs rhs) : TermListRel TermRel lhs rhs :=
+private theorem ScopedTermsRel.toListRel (related : ScopedTermsRel layout lhs rhs) :
+    TermListRel ScopedTermRel layout lhs rhs :=
   match related with
   | .nil => .nil
   | .cons head tail => .cons head tail.toListRel
 
-private theorem prepared_related (variant : BuiltinSemanticsVariant)
-    (stacks : StackRel TermRel left right) (envs : ValueListRel TermRel env env')
-    (terms : TermRel lhs rhs) (ready : prepared lhs = true) :
-    StateRel TermRel (prepare left env lhs) (step variant (.Eval right env' rhs)) := by
-  cases terms with
-  | const => exact .ret stacks .const
-  | lam bodies => exact .ret stacks (.lam bodies envs)
-  | delay bodies => exact .ret stacks (.delay bodies envs)
-  | error => exact .error
-  | reduce reduction _ =>
-    have active := reduction.active
-    cases lhs <;> simp_all [redex, prepared]
-  | var | builtin | force | apply | constr | case => simp [prepared] at ready
+private theorem step_prepared (ready : prepared t = true) (variant : BuiltinSemanticsVariant)
+    (stack : Stack) (env : Environment) : step variant (.Eval stack env t) = prepare stack env t := by
+  cases t <;> simp_all [prepared, prepare, step]
 
-/-- A single optimized CEK transition accounts for a positive number of
-    original transitions. Related environments and frames account for
-    retained code that will be evaluated later. -/
-private theorem eval_progress (variant : BuiltinSemanticsVariant) (related : TermRel lhs rhs) :
-    ∀ {left right env env'}, StackRel TermRel left right → ValueListRel TermRel env env' →
-      ∃ count, StateRel TermRel (stepN variant (count + 1) (.Eval left env lhs))
-        (step variant (.Eval right env' rhs)) := by
-  intro left right env env'
-  refine TermRel.rec (motive_2 := fun _ _ _ => True)
-    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ trivial
+private def EvalProgress (variant : BuiltinSemanticsVariant) (layout : Layout)
+    (lhs rhs : Term) : Prop :=
+    ∀ (left right : Stack) (env env' : Environment), StackRel ScopedTermRel left right →
+      EnvRel ScopedTermRel layout env env' →
+      ∃ sourceSteps targetSteps, (prepared lhs = true → sourceSteps = 0) ∧
+        StateRel ScopedTermRel (stepN variant (sourceSteps + 1) (.Eval left env lhs))
+          (stepN variant (targetSteps + 1) (.Eval right env' rhs))
+
+/-- Synchronize both machines after positive transition counts. A shared
+    builtin can spend different amounts of time on either side, while a
+    syntactic value on the source side takes exactly one step. -/
+private theorem eval_progress (variant : BuiltinSemanticsVariant)
+    (related : ScopedTermRel layout lhs rhs) : EvalProgress variant layout lhs rhs := by
+  refine ScopedTermRel.rec (motive_1 := fun layout lhs rhs _ => EvalProgress variant layout lhs rhs)
+    (motive_2 := fun _ _ _ _ => True)
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ trivial
     (fun _ _ _ _ => trivial) related
-  · intro n stacks envs
-    exact ⟨0, eval_var_related variant stacks envs n⟩
-  · intro _ stacks _
-    exact ⟨0, .ret stacks .const⟩
-  · intro _ stacks _
-    exact ⟨0, .ret stacks (.builtin .nil)⟩
-  · intro _ _
-    exact ⟨0, .error⟩
-  · intro _ _ bodies _ stacks envs
-    exact ⟨0, .ret stacks (.lam bodies envs)⟩
-  · intro _ _ bodies _ stacks envs
-    exact ⟨0, .ret stacks (.delay bodies envs)⟩
-  · intro _ _ bodies _ stacks envs
-    exact ⟨0, .eval (.cons .force stacks) envs bodies⟩
-  · intro _ _ _ _ functions arguments _ _ stacks envs
-    exact ⟨0, .eval (.cons (.leftTerm arguments envs) stacks) envs functions⟩
-  · intro _ _ tag fields _ stacks envs
-    exact ⟨0, eval_constructor_related variant stacks envs fields.toListRel tag⟩
-  · intro _ _ _ _ scrutinees branches _ _ stacks envs
-    exact ⟨0, .eval (.cons (.caseScrutinee branches.toListRel envs) stacks) envs scrutinees⟩
-  · intro _ mid _ rule tail ih stacks envs
-    obtain ⟨count, head⟩ := rule.advance variant left env
+  · intro _ n _ _ _ _ stacks envs
+    exact ⟨0, 0, fun _ => rfl, eval_var_related variant stacks envs n⟩
+  · intro _ _ _ _ _ _ stacks _
+    exact ⟨0, 0, fun _ => rfl, .ret stacks .const⟩
+  · intro _ _ _ _ _ _ stacks _
+    exact ⟨0, 0, fun _ => rfl, .ret stacks (.builtin .nil)⟩
+  · intro _ _ _ _ _ _ _
+    exact ⟨0, 0, fun _ => rfl, .error⟩
+  · intro _ _ _ bodies _ _ _ _ _ stacks envs
+    exact ⟨0, 0, fun _ => rfl, .ret stacks (.lam bodies envs)⟩
+  · intro _ _ _ bodies _ _ _ _ _ stacks envs
+    exact ⟨0, 0, fun _ => rfl, .ret stacks (.delay bodies envs)⟩
+  · intro _ _ _ bodies _ _ _ _ _ stacks envs
+    exact ⟨0, 0, fun _ => rfl, .eval (.cons .force stacks) envs bodies⟩
+  · intro _ _ _ _ _ functions arguments _ _ _ _ _ _ stacks envs
+    exact ⟨0, 0, fun _ => rfl, .eval (.cons (.leftTerm arguments envs) stacks) envs functions⟩
+  · intro _ _ _ tag fields _ _ _ _ _ stacks envs
+    exact ⟨0, 0, fun _ => rfl, eval_constructor_related variant stacks envs fields.toListRel tag⟩
+  · intro _ _ _ _ _ scrutinees branches _ _ _ _ _ _ stacks envs
+    exact ⟨0, 0, fun _ => rfl, .eval (.cons (.caseScrutinee branches.toListRel envs) stacks) envs scrutinees⟩
+  · intro lhs mid _ _ rule _ ih left right env env' stacks envs
+    obtain ⟨spent, entered⟩ := rule.advance variant left env
+    obtain ⟨source, target, single, next⟩ := ih left right env env' stacks envs
+    have impossible : prepared lhs ≠ true := by
+      have active := rule.active
+      cases lhs <;> simp_all [prepared, redex]
     cases ready : prepared mid with
     | false =>
-      obtain ⟨steps, next⟩ := ih stacks envs
-      have join := prepare_eval ready left env
-      refine ⟨count + 1 + steps, ?_⟩
-      rw [Nat.add_assoc (count + 1), stepN_add, head, join]
+      refine ⟨spent + 1 + source, target, fun h => (impossible h).elim, ?_⟩
+      rw [Nat.add_assoc (spent + 1), stepN_add, entered, prepare_eval ready]
       exact next
     | true =>
-      refine ⟨count, ?_⟩
-      rw [head]
-      exact prepared_related variant stacks envs tail ready
+      have zero := single ready
+      subst source
+      refine ⟨spent, target, fun h => (impossible h).elim, ?_⟩
+      rw [entered]
+      simpa only [stepN, step_prepared ready] using next
+  · intro _ forced index found _ _ _ _ stacks envs
+    refine ⟨2 * forced.forces, 0, ?_, ?_⟩
+    · have notReady : prepared forced.term = false := by
+        unfold ForcedBuiltin.term
+        cases forced.forces <;> rfl
+      simp [notReady]
+    · exact eval_hoisted_related variant stacks envs found
+  · intro _ _ body forced _ ih left right env env' stacks envs
+    obtain ⟨source, target, single, next⟩ := ih left right env (forced.value :: env') stacks (.insert forced envs)
+    refine ⟨source, (2 * forced.forces + 5) + target, single, ?_⟩
+    rw [Nat.add_assoc, stepN_add variant (2 * forced.forces + 5) (target + 1), forced.enterLet]
+    exact next
 
-private theorem state_progress (variant : BuiltinSemanticsVariant) (related : StateRel TermRel lhs rhs) :
-    ∃ count, StateRel TermRel (stepN variant (count + 1) lhs) (step variant rhs) := by
+private theorem state_progress (variant : BuiltinSemanticsVariant)
+    (related : StateRel ScopedTermRel lhs rhs) :
+    ∃ left right, StateRel ScopedTermRel (stepN variant (left + 1) lhs)
+      (stepN variant (right + 1) rhs) := by
   cases related with
-  | eval stacks envs terms => exact eval_progress variant terms stacks envs
-  | ret stacks values => exact ⟨0, return_step_related variant stacks values⟩
-  | halt values => exact ⟨0, .halt values⟩
-  | error => exact ⟨0, .error⟩
-  | budgetExhausted => exact ⟨0, .budgetExhausted⟩
+  | eval stacks envs terms =>
+    obtain ⟨left, right, _, next⟩ := eval_progress variant terms _ _ _ _ stacks envs
+    exact ⟨left, right, next⟩
+  | ret stacks values => exact ⟨0, 0, return_step_related variant stacks values⟩
+  | halt values => exact ⟨0, 0, .halt values⟩
+  | error => exact ⟨0, 0, .error⟩
+  | budgetExhausted => exact ⟨0, 0, .budgetExhausted⟩
 
 /-- Observable outcomes distinguish errors, successful termination with any
     value, and the literal constant returned by a successful computation. -/
@@ -95,7 +112,7 @@ def observed (state : State) (observation : Observation) : Prop :=
   | .Halt (.VCon found), .constant expected => found = expected
   | _, _ => False
 
-private theorem StateRel.observed_iff (related : StateRel TermRel lhs rhs) (o : Observation) :
+private theorem StateRel.observed_iff (related : StateRel ScopedTermRel lhs rhs) (o : Observation) :
     observed lhs o ↔ observed rhs o := by
   cases related with
   | halt values => cases values <;> cases o <;> rfl
@@ -109,25 +126,15 @@ private theorem observed_absorbing (h : observed state o) (variant : BuiltinSema
     apply ih
     cases state <;> cases o <;> first | exact h | contradiction
 
-private theorem transferRight (variant : BuiltinSemanticsVariant) (steps : Nat)
-    (related : StateRel TermRel lhs rhs) (result : Observation)
-    (hit : observed (stepN variant steps rhs) result) :
-    ∃ count, observed (stepN variant count lhs) result := by
-  induction steps generalizing lhs rhs with
-  | zero =>
-    exact ⟨0, (related.observed_iff result).mpr hit⟩
-  | succ steps ih =>
-    obtain ⟨spent, next⟩ := state_progress variant related
-    obtain ⟨suffix, observedAfter⟩ := ih next hit
-    exact ⟨(spent + 1) + suffix, by rw [stepN_add]; exact observedAfter⟩
-
-private theorem transferLeft (variant : BuiltinSemanticsVariant) (steps : Nat)
-    (related : StateRel TermRel lhs rhs) (result : Observation)
-    (hit : observed (stepN variant steps lhs) result) :
+private theorem transfer (variant : BuiltinSemanticsVariant) (result : Observation)
+    {R : State → State → Prop}
+    (agree : ∀ {a b}, R a b → (observed a result ↔ observed b result))
+    (advance : ∀ {a b}, R a b → ∃ n m, R (stepN variant (n + 1) a) (stepN variant (m + 1) b))
+    (steps : Nat) (related : R lhs rhs) (hit : observed (stepN variant steps lhs) result) :
     ∃ count, observed (stepN variant count rhs) result := by
   induction steps using Nat.strongRecOn generalizing lhs rhs with
   | ind steps ih =>
-    obtain ⟨spent, next⟩ := state_progress variant related
+    obtain ⟨spent, other, next⟩ := advance related
     if available : spent + 1 ≤ steps then
       let suffix := steps - (spent + 1)
       have count : steps = (spent + 1) + suffix := by omega
@@ -135,23 +142,30 @@ private theorem transferLeft (variant : BuiltinSemanticsVariant) (steps : Nat)
         rw [← stepN_add, ← count]
         exact hit
       obtain ⟨count, reached⟩ := ih suffix (by omega) next rest
-      exact ⟨count + 1, reached⟩
+      exact ⟨other + 1 + count, by rw [stepN_add]; exact reached⟩
     else
       have count : spent + 1 = steps + (spent + 1 - steps) := by omega
       have oldHit : observed (stepN variant (spent + 1) lhs) result := by
         rw [count, stepN_add]
         exact observed_absorbing hit variant (spent + 1 - steps)
-      exact ⟨1, (next.observed_iff result).mp oldHit⟩
+      exact ⟨other + 1, (agree next).mp oldHit⟩
 
 /-- Each related run has exactly the same finite observations, with its own
     fuel. In particular, absence of both success and error is preserved. -/
-theorem StateRel.observations (related : StateRel TermRel lhs rhs)
+theorem StateRel.observations (related : StateRel ScopedTermRel lhs rhs)
     (variant : BuiltinSemanticsVariant) (result : Observation) :
     (∃ steps, observed (stepN variant steps lhs) result) ↔
-      (∃ steps, observed (stepN variant steps rhs) result) :=
-  ⟨fun ⟨steps, hit⟩ => transferLeft variant steps related result hit,
-    fun ⟨steps, hit⟩ => transferRight variant steps related result hit⟩
-
+      (∃ steps, observed (stepN variant steps rhs) result) := by
+  constructor
+  · rintro ⟨count, reached⟩
+    exact transfer variant result (fun r => r.observed_iff result) (state_progress variant)
+      count related reached
+  · rintro ⟨count, reached⟩
+    refine transfer variant result (R := fun a b => StateRel ScopedTermRel b a)
+      (fun r => (r.observed_iff result).symm) ?_ count related reached
+    intro a b rel
+    obtain ⟨n, m, next⟩ := state_progress variant rel
+    exact ⟨m, n, next⟩
 
 /-- A UPLC context with one hole, including positions under binders and
     suspended computations. Plugging uses the AST's de Bruijn indices. -/
@@ -181,8 +195,8 @@ def Context.plug (ctx : Context) (term : Term) : Term :=
 private theorem TermsRel.surround (before after : List Term) (related : TermRel lhs rhs) :
     TermsRel (before ++ lhs :: after) (before ++ rhs :: after) := by
   induction before with
-  | nil => exact .cons related (.refl after)
-  | cons first _ ih => exact .cons (.refl first) ih
+  | nil => exact .cons related (TermsRel.refl after)
+  | cons first _ ih => exact .cons (TermRel.refl first) ih
 
 theorem Context.related (ctx : Context) (related : TermRel lhs rhs) :
     TermRel (ctx.plug lhs) (ctx.plug rhs) := by
@@ -191,18 +205,18 @@ theorem Context.related (ctx : Context) (related : TermRel lhs rhs) :
   | lam _ h => exact .lam h
   | delay _ h => exact .delay h
   | force _ h => exact .force h
-  | applyFn _ arg h => exact .apply h (.refl arg)
-  | applyArg fn _ h => exact .apply (.refl fn) h
+  | applyFn _ arg h => exact .apply h (TermRel.refl arg)
+  | applyArg fn _ h => exact .apply (TermRel.refl fn) h
   | constrField tag before _ after h => exact .constr tag (TermsRel.surround before after h)
-  | caseScrutinee _ branches h => exact .case h (.refl branches)
+  | caseScrutinee _ branches h => exact .case h (TermsRel.refl branches)
   | caseBranch scrutinee before _ after h =>
-    exact .case (.refl scrutinee) (TermsRel.surround before after h)
+    exact .case (TermRel.refl scrutinee) (TermsRel.surround before after h)
 
 private theorem applyParams_related (args : List Term) (related : TermRel lhs rhs) :
     TermRel (applyParams lhs args) (applyParams rhs args) := by
   induction args generalizing lhs rhs with
   | nil => exact related
-  | cons arg args ih => exact ih (.apply related (.refl arg))
+  | cons arg args ih => exact ih (.apply related (TermRel.refl arg))
 
 private theorem observed_runSteps (variant : BuiltinSemanticsVariant) (fuel : Nat)
     (state : State) (o : Observation) :
@@ -234,9 +248,9 @@ def ProgramEquivalent (source target : Program) : Prop :=
 theorem TermRel.programEquivalent (related : TermRel lhs rhs) (version : Version) :
     ProgramEquivalent (.Program version lhs) (.Program version rhs) := by
   intro ctx variant args o
-  have initial : StateRel TermRel (initialState (applyParams (ctx.plug lhs) args))
+  have initial : StateRel ScopedTermRel (initialState (applyParams (ctx.plug lhs) args))
       (initialState (applyParams (ctx.plug rhs) args)) :=
-    .eval .nil .nil (applyParams_related args (ctx.related related))
+    .eval .nil (.same .nil) (applyParams_related args (ctx.related related))
   have relatedObservations := initial.observations variant o
   simpa only [Evaluates, cekExecuteProgramWithSemanticVariant, observed_runSteps] using
     relatedObservations

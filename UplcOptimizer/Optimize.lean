@@ -1,6 +1,7 @@
 import UplcOptimizer.DeepBehavior
 import UplcOptimizer.DeepOptimize
 import UplcOptimizer.DeepRules
+import UplcOptimizer.PolyBuiltin
 
 namespace UplcOptimizer
 
@@ -30,8 +31,19 @@ def optimizeWithProof (program : Program) (maxSweeps : Nat := 12) :
     let counts := optimized.val.2
     let byRule := if counts.rewrites == 0 then {} else
       ({} : Std.HashMap String Nat).insert "theorem-rule" counts.rewrites
-    ⟨(.Program version optimized.val.1, ⟨counts.rewrites, counts.sweeps, byRule⟩),
-      optimized.property.programEquivalent version⟩
+    let stats : Stats := ⟨counts.rewrites, counts.sweeps, byRule⟩
+    let equivalent := optimized.property.programEquivalent version
+    if maxSweeps == 0 then
+      ⟨(.Program version optimized.val.1, stats), equivalent⟩
+    else
+      match Deep.contextualRule optimized.val.1 with
+      | none => ⟨(.Program version optimized.val.1, stats), equivalent⟩
+      | some shared =>
+        let stats : Stats :=
+          ⟨counts.rewrites + 1, counts.sweeps, byRule.insert shared.theoremName 1⟩
+        let sharing := Deep.TermRel.programEquivalent shared.proof version
+        ⟨(.Program version shared.output, stats), fun ctx variant args o =>
+          (equivalent ctx variant args o).trans (sharing ctx variant args o)⟩
 
 /-- Optimize a program solely by applying tagged and checked deep rewrite rules. -/
 def optimize (program : Program) (maxSweeps : Nat := 12) : Program × Stats :=

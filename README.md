@@ -13,7 +13,7 @@ lake env lean --run Main.lean input.uplc --stats > optimized.uplc
 
 Use `--stats` for JSON on stderr with syntax node counts and rewrite counts. Node counts measure the AST. The benchmark encodes programs to measure Flat bytes.
 
-The default profile traverses the entire AST and applies only tagged theorems. Its rules cancel force/delay pairs, remove identity calls on immediate values, fold integer arithmetic and comparisons on literals, select nullary constructor cases and delayed boolean branches, and propagate errors through strict positions. General inlining and cases with constructor fields require stronger rewrite proofs.
+The default profile traverses the entire AST and applies only tagged theorems. Its rules cancel force/delay pairs, remove identity calls on immediate values, fold integer arithmetic and comparisons on literals, select nullary constructor cases and delayed boolean branches, and propagate errors through strict positions. After the local rewrites, it shares fully forced builtins in fresh outer bindings. The selector considers repeated uses and occurrences in explicit self-application loops.
 
 ## Proof of the deep optimizer
 
@@ -34,7 +34,9 @@ With `--literal-arity N`, the pass enters exactly N leading lambdas. The proof c
 
 ## Add a proved rewrite
 
-For the deep optimizer, tag a `StepRule lhs rhs` theorem with `@[uplc_deep_rule]`. Each rule proves that the source reaches the head state of its replacement in a positive number of CEK steps under any continuation and environment. `def_uplc_deep_rules myRules` generates the dispatcher, which can be passed to `Deep.optimizeTerm myRules`. The standard deep rules are in `UplcOptimizer/DeepRules.lean`.
+For local deep rewrites, tag a `StepRule lhs rhs` theorem with `@[uplc_deep_rule]`. Each rule proves that the source reaches the head state of its replacement in a positive number of CEK steps under any continuation and environment. `def_uplc_deep_rules myRules` generates the dispatcher, which can be passed to `Deep.optimizeTerm myRules`. The standard local rules are in `UplcOptimizer/DeepRules.lean`.
+
+Builtin hoisting is registered with `@[uplc_contextual_rule]`. Its theorem certifies every output of its matcher. The CEK simulation tracks the new environment slots and how existing de Bruijn indices move. Each hoisted force chain must stop at a builtin value before any term argument is applied. See `UplcOptimizer/PolyBuiltin.lean`.
 
 Use fully applied constructors and literals in the left-hand side and capture each data parameter once. Theorems can include decidable premises on those parameters. If a premise fails, the dispatcher tries the next candidate. Candidates are tried in deterministic Lean name order.
 
@@ -45,6 +47,7 @@ The root-only optimizer uses `@[uplc_rule]` for `CekJoin lhs rhs` theorems in `U
 ```sh
 lake env lean Tests/TaggedRules.lean
 lake env lean Tests/DeepBehavior.lean
+lake env lean Tests/PolyBuiltin.lean
 python test_optimizer.py --aiken /path/to/aiken --bench
 ```
 

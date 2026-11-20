@@ -1,4 +1,4 @@
-import UplcOptimizer.LocalProofs
+import UplcOptimizer.DeepScope
 
 namespace UplcOptimizer.Deep
 
@@ -38,23 +38,34 @@ structure StepRule (lhs rhs : Term) : Prop where
     stepN variant (steps + 1) (.Eval stack env lhs) = prepare stack env rhs
 
 mutual
-  inductive TermRel : Term → Term → Prop
-    | var (n : Nat) : TermRel (.Var n) (.Var n)
-    | const (c : Const) : TermRel (.Const c) (.Const c)
-    | builtin (b : BuiltinFun) : TermRel (.Builtin b) (.Builtin b)
-    | error : TermRel .Error .Error
-    | lam : TermRel lhs rhs → TermRel (.Lam lhs) (.Lam rhs)
-    | delay : TermRel lhs rhs → TermRel (.Delay lhs) (.Delay rhs)
-    | force : TermRel lhs rhs → TermRel (.Force lhs) (.Force rhs)
-    | apply : TermRel lhs rhs → TermRel arg arg' → TermRel (.Apply lhs arg) (.Apply rhs arg')
-    | constr (tag : Nat) : TermsRel lhs rhs → TermRel (.Constr tag lhs) (.Constr tag rhs)
-    | case : TermRel lhs rhs → TermsRel bs cs → TermRel (.Case lhs bs) (.Case rhs cs)
-    | reduce : StepRule lhs mid → TermRel mid rhs → TermRel lhs rhs
+  inductive ScopedTermRel : Layout → Term → Term → Prop
+    | var (n : Nat) : ScopedTermRel layout (.Var n) (.Var (layout.rename n))
+    | const (c : Const) : ScopedTermRel layout (.Const c) (.Const c)
+    | builtin (b : BuiltinFun) : ScopedTermRel layout (.Builtin b) (.Builtin b)
+    | error : ScopedTermRel layout .Error .Error
+    | lam : ScopedTermRel layout.underBinder lhs rhs → ScopedTermRel layout (.Lam lhs) (.Lam rhs)
+    | delay : ScopedTermRel layout lhs rhs → ScopedTermRel layout (.Delay lhs) (.Delay rhs)
+    | force : ScopedTermRel layout lhs rhs → ScopedTermRel layout (.Force lhs) (.Force rhs)
+    | apply : ScopedTermRel layout lhs rhs → ScopedTermRel layout arg arg' →
+        ScopedTermRel layout (.Apply lhs arg) (.Apply rhs arg')
+    | constr (tag : Nat) : ScopedTermsRel layout lhs rhs →
+        ScopedTermRel layout (.Constr tag lhs) (.Constr tag rhs)
+    | case : ScopedTermRel layout lhs rhs → ScopedTermsRel layout bs cs →
+        ScopedTermRel layout (.Case lhs bs) (.Case rhs cs)
+    | reduce : StepRule lhs mid → ScopedTermRel layout mid rhs → ScopedTermRel layout lhs rhs
+    | reference (forced : ForcedBuiltin) (index : Nat) :
+        layout.hoistedAt index = some forced → ScopedTermRel layout forced.term (.Var index)
+    | hoist (forced : ForcedBuiltin) : ScopedTermRel (.insert forced layout) lhs body →
+        ScopedTermRel layout lhs (.Apply (.Lam body) forced.term)
 
-  inductive TermsRel : List Term → List Term → Prop
-    | nil : TermsRel [] []
-    | cons : TermRel a b → TermsRel as bs → TermsRel (a :: as) (b :: bs)
+  inductive ScopedTermsRel : Layout → List Term → List Term → Prop
+    | nil : ScopedTermsRel layout [] []
+    | cons : ScopedTermRel layout a b → ScopedTermsRel layout as bs →
+        ScopedTermsRel layout (a :: as) (b :: bs)
 end
+
+abbrev TermRel := ScopedTermRel .same
+abbrev TermsRel := ScopedTermsRel .same
 
 mutual
   theorem TermRel.refl (term : Term) : TermRel term term :=
