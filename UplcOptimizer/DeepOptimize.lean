@@ -108,8 +108,14 @@ mutual
   decreasing_by all_goals simp_wf <;> omega
 end
 
+private def sweepDeferred (depth : Nat) (term : Term) : List ContextualDispatch → SweepResult term
+  | [] => ⟨(term, {}), TermRel.refl term⟩
+  | dispatch :: rest =>
+    let result := sweep (fun _ => none) dispatch depth term
+    if result.val.2.total == 0 then sweepDeferred depth term rest else result
+
 private def optimizeTermWithFuel (rewrite : RuleDispatch) (contextual : ContextualDispatch)
-    (late : Option ContextualDispatch) :
+    (deferred : List ContextualDispatch) :
     (fuel : Nat) → (term : Term) → { result : Term × DeepStats // TermRel.Chain term result.1 }
   | 0, term => ⟨(term, {}), .refl term⟩
   | fuel + 1, term =>
@@ -117,16 +123,13 @@ private def optimizeTermWithFuel (rewrite : RuleDispatch) (contextual : Contextu
     let early := sweep rewrite contextual depth term
     -- Give local simplifications, including selection on a known condition,
     -- priority over a contextual rewrite that changes the branch shape.
-    let first := match late with
-      | some dispatch =>
-        if early.val.2.total == 0 then sweep (fun _ => none) dispatch depth term else early
-      | none => early
+    let first := if early.val.2.total == 0 then sweepDeferred depth term deferred else early
     let counts := first.val.2
     let rewrites := counts.total
     if rewrites == 0 then
       ⟨(term, { sweeps := 1 }), .refl term⟩
     else
-      let rest := optimizeTermWithFuel rewrite contextual late fuel first.val.1
+      let rest := optimizeTermWithFuel rewrite contextual deferred fuel first.val.1
       let stats : DeepStats :=
         { rewrites := rewrites + rest.val.2.rewrites
           sweeps := 1 + rest.val.2.sweeps
@@ -135,8 +138,9 @@ private def optimizeTermWithFuel (rewrite : RuleDispatch) (contextual : Contextu
 
 /-- Traverse the term and repeat until no rule fires or the sweep limit is reached. -/
 def optimizeTerm (rewrite : RuleDispatch) (term : Term) (maxSweeps : Nat := 12)
-    (contextual : ContextualDispatch := fun _ => none) (late : Option ContextualDispatch := none) :
+    (contextual : ContextualDispatch := fun _ => none) (late : Option ContextualDispatch := none)
+    (afterLate : List ContextualDispatch := []) :
     { result : Term × DeepStats // TermRel.Chain term result.1 } :=
-  optimizeTermWithFuel rewrite contextual late maxSweeps term
+  optimizeTermWithFuel rewrite contextual (late.toList ++ afterLate) maxSweeps term
 
 end UplcOptimizer.Deep

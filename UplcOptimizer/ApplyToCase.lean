@@ -48,10 +48,10 @@ def packConditionalApplications? (term : Term) : Option Term :=
 def_uplc_contextual_rules packingRules
 
 /-- Only UPLC 1.1 and later can represent the packed term. -/
-def supportsCasePacking : Version → Bool
+private def supportsCasePacking : Version → Bool
   | .Version major minor _ => decide (major > 1 ∨ (major = 1 ∧ minor ≥ 1))
 
-def applyToCaseRule (version : Version) : ContextualDispatch :=
-  if supportsCasePacking version then packingRules else fun _ => none
+def applyToCaseRules (version : Version) : List ContextualDispatch :=
+  if supportsCasePacking version then [packingRules] else []
 
 end UplcOptimizer.Deep
