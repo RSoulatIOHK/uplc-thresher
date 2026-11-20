@@ -27,7 +27,7 @@ private theorem application_not_prepared (fn arg : Term) (rest : List Term) :
 private theorem cache_eval_related (expr : CacheExpr) (envs : EnvRel ScopedTermRel .same left right) :
     ValueOptionRel ScopedTermRel (expr.eval left) (expr.eval right) := by
   induction expr with
-  | var index => exact envs.lookup index
+  | var index => exact envs.lookup index rfl
   | const value => exact .some .const
   | project op arg ih =>
     simp only [CacheExpr.eval]
@@ -52,10 +52,10 @@ private theorem eval_progress (variant : BuiltinSemanticsVariant)
     (related : ScopedTermRel layout lhs rhs) : EvalProgress variant layout lhs rhs := by
   refine ScopedTermRel.rec (motive_1 := fun layout lhs rhs _ => EvalProgress variant layout lhs rhs)
     (motive_2 := fun _ _ _ _ => True)
-    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ trivial
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ trivial
     (fun _ _ _ _ => trivial) related
-  · intro _ n _ _ _ _ stacks envs
-    exact ⟨0, 0, fun _ => rfl, eval_var_related variant stacks envs n⟩
+  · intro _ n allowed _ _ _ _ stacks envs
+    exact ⟨0, 0, fun _ => rfl, eval_var_related variant stacks envs n allowed⟩
   · intro _ _ _ _ _ _ stacks _
     exact ⟨0, 0, fun _ => rfl, .ret stacks .const⟩
   · intro _ _ _ _ _ _ stacks _
@@ -147,6 +147,13 @@ private theorem eval_progress (variant : BuiltinSemanticsVariant)
       rw [Nat.add_assoc (expr.steps + 4), stepN_add variant (expr.steps + 4) (target + 1),
         expr.enterLet, targetEval]
       exact next
+  · intro _ index first slot found _ _ _ _ stacks envs
+    exact ⟨7, 0, by simp [prepared, pairProjection],
+      eval_split_pair_projection_related variant stacks envs found⟩
+  · intro _ _ arg bodies _ _ _ _ _ stacks envs
+    obtain ⟨source, target, next⟩ :=
+      eval_unpack_pair_let_related variant stacks envs bodies TermRel.refl arg
+    exact ⟨source, target, by simp [prepared], next⟩
 
 private theorem state_progress (variant : BuiltinSemanticsVariant)
     (related : StateRel ScopedTermRel lhs rhs) :

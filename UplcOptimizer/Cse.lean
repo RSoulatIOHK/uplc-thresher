@@ -45,6 +45,7 @@ private def cacheIndex? : Layout → Option Nat
   | .same => none
   | .keep tail | .insert _ tail => (cacheIndex? tail).map Nat.succ
   | .cache .. => some 0
+  | .splitPair tail => (cacheIndex? tail).map (· + 2)
 
 private def cachedSubstitution (layout : Layout) (term : Term) :
     Option { out : Term // ScopedTermRel layout term out } := do
@@ -58,8 +59,8 @@ private def cachedSubstitution (layout : Layout) (term : Term) :
 
 private def cseResult (term : Term) : Option { output : Term // TermRel term output } := do
   if active : prepared term = false then
-    (firstCandidates term).findSome? fun candidate =>
-      let body := rewriteShared cachedSubstitution (.cache candidate.expr .same) term
+    (firstCandidates term).findSome? fun candidate => do
+      let body ← rewriteShared? cachedSubstitution (.cache candidate.expr .same) term
       if body.uses ≥ 2 then
         some ⟨.Apply (.Lam body.output) candidate.expr.term,
           .shareCommonProjection candidate.expr candidate.first active body.proof⟩

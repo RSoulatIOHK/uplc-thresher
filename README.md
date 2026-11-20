@@ -48,6 +48,8 @@ Use fully applied constructors and literals in the left-hand side and capture ea
 
 Common subexpression elimination shares repeated Data, list, and pair projections when an existing occurrence is evaluated first. The rule binds that result once and replaces matching uses with a capture-safe lookup, including uses under binders. A failed projection still occurs before other potentially failing or diverging work. See `UplcOptimizer/Cse.lean`.
 
+On UPLC 1.1 and later, a tagged rule destructures `unConstrData` once when the bound pair is used only for two or more direct field projections. It preserves strict evaluation of the Data argument and rewrites each projection to a capture-safe field lookup. See `UplcOptimizer/UnpackPair.lean`.
+
 The root-only optimizer uses `@[uplc_rule]` for `CekJoin lhs rhs` theorems in `UplcOptimizer/LocalProofs.lean`. `def_uplc_rules myRules` and `certifiedRootWith myRules` provide the corresponding extension points.
 
 ## Test and benchmark
@@ -60,6 +62,7 @@ lake env lean Tests/ForceDelay.lean
 lake env lean Tests/ForceIf.lean
 lake env lean Tests/ApplyToCase.lean
 lake env lean Tests/Cse.lean
+lake env lean Tests/UnpackPair.lean
 python test_optimizer.py --aiken /path/to/aiken --bench
 ```
 

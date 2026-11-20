@@ -1,6 +1,7 @@
 import UplcOptimizer.Application
 import UplcOptimizer.Conditional
 import UplcOptimizer.DeepValues
+import UplcOptimizer.PairUnpackForm
 import PlutusCore.UPLC.CekMachine
 
 namespace UplcOptimizer.Deep
@@ -15,6 +16,9 @@ private def ifConditionStack (stack : Stack) (env : Environment) (yes no : Term)
   .RightApplicationOfValue (.VBuiltin .IfThenElse []
     (.More .ArgV (.More .ArgV (.One .ArgV)))) ::
   .LeftApplicationToTerm yes env :: .LeftApplicationToTerm no env :: stack
+
+private def unConstrDataFrame : Frame :=
+  .RightApplicationOfValue (.VBuiltin .UnConstrData [] (.One .ArgV))
 
 inductive OptionRel {α : Type} (R : α → α → Prop) : Option α → Option α → Prop where
   | none : OptionRel R none none
@@ -91,6 +95,12 @@ inductive StackRel (R : Layout → Term → Term → Prop) : Stack → Stack →
       (ifConditionStack s e yes no)
       (.ConstructorArgument 0 [] [yes, no] e' ::
         .CaseScrutinee [.Force (.Builtin .IfThenElse)] e' :: t)
+  /-- Evaluate the same operand of `unConstrData` before either binding its
+  pair or supplying the pair's fields to the target's case branch. -/
+  | unpackPair : StackRel R s t → EnvRel R .same e e' → R (.splitPair .same) lhs rhs →
+      StackRel R
+        (unConstrDataFrame :: .RightApplicationOfValue (.VLam lhs e) :: s)
+        (unConstrDataFrame :: .CaseScrutinee [.Lam (.Lam rhs)] e' :: t)
 
 inductive StateRel (R : Layout → Term → Term → Prop) : State → State → Prop where
   | eval : StackRel R stack stack' → EnvRel R layout env env' → R layout term term' →
@@ -350,6 +360,23 @@ private theorem packed_if_return (variant : BuiltinSemanticsVariant) (stacks : S
         | exact .ret stacks (.delay (refl _) envs)
     | _ => exact .error
 
+private theorem unpack_pair_return (variant : BuiltinSemanticsVariant) (stacks : StackRel R s t)
+    (envs : EnvRel R .same e e') (bodies : R (.splitPair .same) lhs rhs)
+    (values : ValueRel R v w) :
+    StateRel R
+      (stepN variant 2 (.Return (unConstrDataFrame :: .RightApplicationOfValue (.VLam lhs e) :: s) v))
+      (stepN variant 6 (.Return (unConstrDataFrame :: .CaseScrutinee [.Lam (.Lam rhs)] e' :: t) w)) := by
+  cases values with
+  | @const constant =>
+    cases constant with
+    | Data data =>
+      cases data with
+      | Constr tag fields =>
+        exact .eval stacks (.splitPair (.Integer tag) (.ConstDataList fields) envs) bodies
+      | _ => exact .error
+    | _ => exact .error
+  | _ => exact .error
+
 /-- A return transition preserves correspondence after one or more steps on
 both sides. Saturated spines advance to the next argument or enter the body.
 Conditionals resume with the selected arm's value or an error. -/
@@ -373,6 +400,8 @@ theorem return_progress (variant : BuiltinSemanticsVariant) (stacks : StackRel R
       remaining values refl
   | packIf stacks envs yesReady noReady =>
     exact ⟨6, 11, packed_if_return variant stacks envs values refl yesReady noReady⟩
+  | unpackPair stacks envs bodies =>
+    exact ⟨1, 5, unpack_pair_return variant stacks envs bodies values⟩
 
 private theorem enterSaturatedCall (variant : BuiltinSemanticsVariant) (stack : Stack)
     (env : Environment) (body first : Term) (rest : List Term) :
@@ -440,12 +469,32 @@ theorem eval_apply_if_to_case_related (variant : BuiltinSemanticsVariant) (stack
         [.Force (.Builtin .IfThenElse)]))) :=
   ⟨6, 1, .eval (.packIf stacks envs yesReady noReady) envs (refl cond)⟩
 
+/-- Both programs first evaluate the operand of `unConstrData` in their
+original environments. The pair let and the case branch only run afterward. -/
+theorem eval_unpack_pair_let_related (variant : BuiltinSemanticsVariant) (stacks : StackRel R s t)
+    (envs : EnvRel R .same e e') (bodies : R (.splitPair .same) lhs rhs)
+    (refl : ∀ term, R .same term term) (arg : Term) :
+    ∃ n m, StateRel R
+      (stepN variant (n + 1) (.Eval s e (.Apply (.Lam lhs) (unConstrDataTerm arg))))
+      (stepN variant (m + 1) (.Eval t e' (.Case (unConstrDataTerm arg) [.Lam (.Lam rhs)]))) :=
+  ⟨5, 3, .eval (.unpackPair stacks envs bodies) envs (refl arg)⟩
+
+theorem eval_split_pair_projection_related (variant : BuiltinSemanticsVariant)
+    (stacks : StackRel R s t) (envs : EnvRel R layout e e')
+    (found : layout.pairField index first = some slot) :
+    StateRel R (stepN variant 8 (.Eval s e (pairProjection index first)))
+      (step variant (.Eval t e' (.Var slot))) := by
+  obtain ⟨a, b, source, target⟩ := envs.pairLookup found
+  cases first <;> simp only [pairProjection, stepN, step, List.get?Internal_eq_getElem?, source,
+    target, Bool.false_eq_true, if_false, if_true]
+  all_goals exact .ret stacks .const
+
 theorem eval_var_related (variant : BuiltinSemanticsVariant) (stacks : StackRel R s t)
-    (envs : EnvRel R layout e e') (idx : Nat) :
+    (envs : EnvRel R layout e e') (idx : Nat) (allowed : layout.varAllowed idx = true) :
     StateRel R (step variant (.Eval s e (.Var idx)))
       (step variant (.Eval t e' (.Var (layout.rename idx)))) := by
   simp only [step, List.get?Internal_eq_getElem?]
-  have related := envs.lookup idx
+  have related := envs.lookup idx allowed
   generalize e[idx]? = left at related ⊢
   generalize e'[layout.rename idx]? = right at related ⊢
   cases related with

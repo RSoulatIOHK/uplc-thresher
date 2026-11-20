@@ -23,6 +23,8 @@ private def reference? (term : Term) : (layout : Layout) → Option (Reference l
       (reference? term tail).map fun ref => ⟨ref.forced, ref.index + 1, ref.found, ref.same⟩
   | .cache _ tail => (reference? term tail).map fun ref =>
       ⟨ref.forced, ref.index + 1, ref.found, ref.same⟩
+  | .splitPair tail => (reference? term tail).map fun ref =>
+      ⟨ref.forced, ref.index + 2, ref.found, ref.same⟩
 
 private def substituteForced : Substitute := fun layout term => do
   let ref ← reference? term layout
@@ -33,13 +35,13 @@ private def substituteForced : Substitute := fun layout term => do
     exact .reference forced index found⟩
 
 private def bindAll (term : Term) (layout : Layout) : (builtins : List ForcedBuiltin) →
-    { output : Term // ScopedTermRel layout term output }
-  | [] =>
-    let body := rewriteShared substituteForced layout term
-    ⟨body.output, body.proof⟩
-  | forced :: rest =>
-    let body := bindAll term (.insert forced layout) rest
-    ⟨.Apply (.Lam body.val) forced.term, .hoist forced body.property⟩
+    Option { output : Term // ScopedTermRel layout term output }
+  | [] => do
+    let body ← rewriteShared? substituteForced layout term
+    return ⟨body.output, body.proof⟩
+  | forced :: rest => do
+    let body ← bindAll term (.insert forced layout) rest
+    return ⟨.Apply (.Lam body.val) forced.term, .hoist forced body.property⟩
 
 private structure Uses where
   forced : ForcedBuiltin
@@ -87,7 +89,7 @@ private def profitable (use : Uses) : Bool :=
 private def hoistResult (term : Term) : Option { output : Term // TermRel term output } :=
   match (collectUses term false []).filterMap (fun use => if profitable use then some use.forced else none) with
   | [] => none
-  | selected => some (bindAll term .same selected)
+  | selected => bindAll term .same selected
 
 def hoistPolyBuiltin? (term : Term) : Option Term := (hoistResult term).map Subtype.val
 

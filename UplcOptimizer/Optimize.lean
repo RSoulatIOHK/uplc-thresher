@@ -6,6 +6,7 @@ import UplcOptimizer.DeepRules
 import UplcOptimizer.ForceDelay
 import UplcOptimizer.ForceIf
 import UplcOptimizer.PolyBuiltin
+import UplcOptimizer.UnpackPair
 
 namespace UplcOptimizer
 
@@ -31,8 +32,9 @@ def optimizeWithProof (program : Program) (maxSweeps : Nat := 12) :
     { result : Program × Stats // Deep.ProgramEquivalent program result.1 } :=
   match program with
   | .Program version term =>
+    let unpack := if Deep.supportsCasePacking version then [Deep.unpackPairRule] else []
     let optimized := Deep.optimizeTerm Deep.rootRule term maxSweeps
-      Deep.forceDelayRule (some Deep.forceIfRule) (Deep.applyToCaseRules version ++ [Deep.cseRule])
+      Deep.forceDelayRule (some Deep.forceIfRule) (Deep.applyToCaseRules version ++ [Deep.cseRule] ++ unpack)
     let counts := optimized.val.2
     let localSteps := counts.rewrites - counts.contextualRules.length
     let byRule : Std.HashMap String Nat :=

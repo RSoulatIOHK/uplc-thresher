@@ -2,6 +2,7 @@ import UplcOptimizer.DeepScope
 import UplcOptimizer.Application
 import UplcOptimizer.Conditional
 import UplcOptimizer.Dominates
+import UplcOptimizer.PairUnpackForm
 
 namespace UplcOptimizer.Deep
 
@@ -42,7 +43,8 @@ structure StepRule (lhs rhs : Term) : Prop where
 
 mutual
   inductive ScopedTermRel : Layout → Term → Term → Prop
-    | var (n : Nat) : ScopedTermRel layout (.Var n) (.Var (layout.rename n))
+    | var (n : Nat) : layout.varAllowed n = true →
+        ScopedTermRel layout (.Var n) (.Var (layout.rename n))
     | const (c : Const) : ScopedTermRel layout (.Const c) (.Const c)
     | builtin (b : BuiltinFun) : ScopedTermRel layout (.Builtin b) (.Builtin b)
     | error : ScopedTermRel layout .Error .Error
@@ -81,6 +83,12 @@ mutual
     | shareCommonProjection (expr : CacheExpr) (first : FirstUse expr.term lhs)
         (active : prepared lhs = false) : ScopedTermRel (.cache expr .same) lhs body →
         ScopedTermRel .same lhs (.Apply (.Lam body) expr.term)
+    | splitPairProjection (index : Nat) (first : Bool) (slot : Nat) :
+        layout.pairField index first = some slot →
+        ScopedTermRel layout (pairProjection index first) (.Var slot)
+    | unpackPairLet (arg : Term) : ScopedTermRel (.splitPair .same) lhs rhs →
+        ScopedTermRel .same (.Apply (.Lam lhs) (unConstrDataTerm arg))
+          (.Case (unConstrDataTerm arg) [.Lam (.Lam rhs)])
 
   inductive ScopedTermsRel : Layout → List Term → List Term → Prop
     | nil : ScopedTermsRel layout [] []
@@ -94,7 +102,7 @@ abbrev TermsRel := ScopedTermsRel .same
 mutual
   theorem TermRel.refl (term : Term) : TermRel term term :=
     match term with
-    | .Var n => .var n
+    | .Var n => .var n rfl
     | .Const c => .const c
     | .Builtin b => .builtin b
     | .Error => .error
