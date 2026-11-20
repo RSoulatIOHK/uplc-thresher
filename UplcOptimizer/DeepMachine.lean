@@ -1,3 +1,4 @@
+import UplcOptimizer.Application
 import UplcOptimizer.DeepValues
 import PlutusCore.UPLC.CekMachine
 
@@ -49,7 +50,19 @@ inductive FrameRel (R : Layout → Term → Term → Prop) : Frame → Frame →
   | caseScrutinee : TermListRel R layout branches branches' → EnvRel R layout env env' →
       FrameRel R (.CaseScrutinee branches env) (.CaseScrutinee branches' env')
 
-abbrev StackRel (R : Layout → Term → Term → Prop) := ListRel (FrameRel R)
+inductive StackRel (R : Layout → Term → Term → Prop) : Stack → Stack → Prop where
+  | nil : StackRel R [] []
+  | cons : FrameRel R f f' → StackRel R s t → StackRel R (f :: s) (f' :: t)
+  /-- The two evaluators are running the same argument of a saturated lambda
+  spine. The source retains a final force; neither side executes it while
+  any argument is still being evaluated. -/
+  | saturatedDelay (rest : List Term) : StackRel R s t →
+      EnvRel R .same captured captured' → EnvRel R .same arguments arguments' →
+      R .same body body' → StackRel R
+        (.RightApplicationOfValue (.VLam (lambdaPrefix rest.length (.Delay body)) captured) ::
+          applicationFrames rest (.ForceFrame :: s) arguments)
+        (.RightApplicationOfValue (.VLam (lambdaPrefix rest.length body') captured') ::
+          applicationFrames rest t arguments')
 
 inductive StateRel (R : Layout → Term → Term → Prop) : State → State → Prop where
   | eval : StackRel R stack stack' → EnvRel R layout env env' → R layout term term' →
@@ -207,24 +220,65 @@ private theorem case_related (variant : BuiltinSemanticsVariant) (stacks : Stack
   | delay => exact .error
   | builtin => exact .error
 
-/-- A return transition preserves structurally related stacks and values. -/
-theorem return_step_related (variant : BuiltinSemanticsVariant) (stacks : StackRel R s t)
-    (values : ValueRel R v w) :
-    StateRel R (step variant (.Return s v)) (step variant (.Return t w)) := by
+private theorem return_step_related (variant : BuiltinSemanticsVariant) (frames : FrameRel R f f')
+    (stacks : StackRel R s t) (values : ValueRel R v w) :
+    StateRel R (step variant (.Return (f :: s) v)) (step variant (.Return (f' :: t) w)) := by
+  cases frames with
+  | force => exact force_related variant stacks values
+  | leftTerm terms envs => exact .eval (.cons (.rightValue values) stacks) envs terms
+  | leftValue args => exact apply_related variant stacks values args
+  | rightValue fns => exact apply_related variant stacks fns values
+  | constructorArgument seen remaining envs =>
+    cases remaining with
+    | nil => exact .ret stacks (.constr (ValueListRel.cons values seen).reverse)
+    | cons terms rest =>
+      exact .eval (.cons (.constructorArgument (.cons values seen) rest envs) stacks) envs terms
+  | caseScrutinee branches envs => exact case_related variant stacks envs branches values
+
+/-- A return transition preserves correspondence after one or more steps on
+both sides. Saturated spines advance to the next argument or enter the body. -/
+theorem return_progress (variant : BuiltinSemanticsVariant) (stacks : StackRel R s t)
+    (values : ValueRel R v w) (refl : ∀ term, R .same term term) :
+    ∃ n m, StateRel R (stepN variant (n + 1) (.Return s v))
+      (stepN variant (m + 1) (.Return t w)) := by
   cases stacks with
-  | nil => exact .halt values
-  | cons frames stacks =>
-    cases frames with
-    | force => exact force_related variant stacks values
-    | leftTerm terms envs => exact .eval (.cons (.rightValue values) stacks) envs terms
-    | leftValue args => exact apply_related variant stacks values args
-    | rightValue fns => exact apply_related variant stacks fns values
-    | constructorArgument seen remaining envs =>
-      cases remaining with
-      | nil => exact .ret stacks (.constr (ValueListRel.cons values seen).reverse)
-      | cons terms rest =>
-        exact .eval (.cons (.constructorArgument (.cons values seen) rest envs) stacks) envs terms
-    | caseScrutinee branches envs => exact case_related variant stacks envs branches values
+  | nil => exact ⟨0, 0, .halt values⟩
+  | cons frames stacks => exact ⟨0, 0, return_step_related variant frames stacks values⟩
+  | saturatedDelay rest stacks captured arguments bodies =>
+    cases rest with
+    | nil => exact ⟨2, 0, .eval stacks (captured.push values) bodies⟩
+    | cons arg rest =>
+      exact ⟨2, 2, .eval (.saturatedDelay rest stacks (captured.push values) arguments bodies)
+        arguments (refl arg)⟩
+
+private theorem enterSaturatedCall (variant : BuiltinSemanticsVariant) (stack : Stack)
+    (env : Environment) (body first : Term) (rest : List Term) :
+    stepN variant ((first :: rest).length + 2)
+      (.Eval stack env (applyParams (lambdaPrefix (rest.length + 1) body) (first :: rest))) =
+      .Eval (.RightApplicationOfValue (.VLam (lambdaPrefix rest.length body) env) ::
+        applicationFrames rest stack env) env first := by
+  rw [stepN_add, stepN_applyParams]
+  rfl
+
+/-- Enter the first argument of two exactly saturated lambda spines. The
+source forces the delayed body after the last argument, while the target
+enters its related body directly. Arguments themselves can be arbitrary. -/
+theorem eval_force_saturated_related (variant : BuiltinSemanticsVariant) (stacks : StackRel R s t)
+    (envs : EnvRel R .same e e') (related : R .same lhs rhs)
+    (refl : ∀ term, R .same term term) (first : Term) (rest : List Term) :
+    ∃ n m, StateRel R
+      (stepN variant (n + 1) (.Eval s e (.Force
+        (applyParams (lambdaPrefix (rest.length + 1) (.Delay lhs)) (first :: rest)))))
+      (stepN variant (m + 1) (.Eval t e'
+        (applyParams (lambdaPrefix (rest.length + 1) rhs) (first :: rest)))) := by
+  refine ⟨(first :: rest).length + 2, (first :: rest).length + 1, ?_⟩
+  change StateRel R
+    (stepN variant ((first :: rest).length + 2) (.Eval (.ForceFrame :: s) e
+      (applyParams (lambdaPrefix (rest.length + 1) (.Delay lhs)) (first :: rest))))
+    (stepN variant ((first :: rest).length + 2) (.Eval t e'
+      (applyParams (lambdaPrefix (rest.length + 1) rhs) (first :: rest))))
+  rw [enterSaturatedCall, enterSaturatedCall]
+  exact .eval (.saturatedDelay rest stacks envs envs related) envs (refl first)
 
 theorem eval_var_related (variant : BuiltinSemanticsVariant) (stacks : StackRel R s t)
     (envs : EnvRel R layout e e') (idx : Nat) :

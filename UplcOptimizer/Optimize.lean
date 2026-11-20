@@ -1,6 +1,7 @@
 import UplcOptimizer.DeepBehavior
 import UplcOptimizer.DeepOptimize
 import UplcOptimizer.DeepRules
+import UplcOptimizer.ForceDelay
 import UplcOptimizer.PolyBuiltin
 
 namespace UplcOptimizer
@@ -27,10 +28,13 @@ def optimizeWithProof (program : Program) (maxSweeps : Nat := 12) :
     { result : Program × Stats // Deep.ProgramEquivalent program result.1 } :=
   match program with
   | .Program version term =>
-    let optimized := Deep.optimizeTerm Deep.rootRule term maxSweeps
+    let optimized := Deep.optimizeTerm Deep.rootRule term maxSweeps Deep.forceDelayRule
     let counts := optimized.val.2
-    let byRule := if counts.rewrites == 0 then {} else
-      ({} : Std.HashMap String Nat).insert "theorem-rule" counts.rewrites
+    let localSteps := counts.rewrites - counts.contextualRules.length
+    let byRule : Std.HashMap String Nat :=
+      if localSteps == 0 then {} else ({} : Std.HashMap String Nat).insert "theorem-rule" localSteps
+    let byRule := counts.contextualRules.foldl
+      (fun totals rule => totals.insert rule (totals[rule]?.getD 0 + 1)) byRule
     let stats : Stats := ⟨counts.rewrites, counts.sweeps, byRule⟩
     let equivalent := optimized.property.programEquivalent version
     if maxSweeps == 0 then

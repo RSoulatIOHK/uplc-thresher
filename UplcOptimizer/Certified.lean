@@ -1,4 +1,4 @@
-import UplcOptimizer.LocalProofs
+import UplcOptimizer.Application
 
 namespace UplcOptimizer
 
@@ -24,20 +24,6 @@ def certifiedRootWith (rewrite : (term : Term) → Option { result : Term // Cek
 /-- Apply the rules generated from the standard tagged theorems. -/
 def certifiedRoot := certifiedRootWith rootRule
 
-private def applicationFrames (args : List Term) (stack : Stack) (env : Environment) : Stack :=
-  args.foldr (fun arg rest => .LeftApplicationToTerm arg env :: rest) stack
-
-private theorem stepN_applyParams (variant : BuiltinSemanticsVariant) (args : List Term)
-    (body : Term) (stack : Stack) (env : Environment) :
-    stepN variant args.length (.Eval stack env (applyParams body args)) =
-      .Eval (applicationFrames args stack env) env body := by
-  induction args generalizing body with
-  | nil => rfl
-  | cons arg args ih =>
-    change stepN variant (args.length + 1) (.Eval stack env (applyParams (.Apply body arg) args)) = _
-    rw [stepN_add, ih]
-    rfl
-
 /-- Applying the same explicit arguments preserves a root CEK join. They are
 placed on the continuation before either function term begins evaluation. -/
 theorem CekJoin.applyParams {lhs rhs : Term} (joined : CekJoin lhs rhs) (args : List Term) :
@@ -47,11 +33,6 @@ theorem CekJoin.applyParams {lhs rhs : Term} (joined : CekJoin lhs rhs) (args : 
   obtain ⟨leftSteps, rightSteps, same⟩ := joined variant (applicationFrames args stack env) env
   refine ⟨args.length + leftSteps, args.length + rightSteps, ?_⟩
   simpa only [stepN_add, stepN_applyParams] using same
-
-/-- Wrap the body in `arity` consecutive lambda binders. -/
-def lambdaPrefix : Nat → Term → Term
-  | 0, body => body
-  | arity + 1, body => .Lam (lambdaPrefix arity body)
 
 private theorem stepN_literalPrefix (variant : BuiltinSemanticsVariant) (args : List Const)
     (body : Term) (stack : Stack) (caller captured : Environment) :

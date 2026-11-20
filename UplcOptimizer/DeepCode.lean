@@ -1,4 +1,5 @@
 import UplcOptimizer.DeepScope
+import UplcOptimizer.Application
 
 namespace UplcOptimizer.Deep
 
@@ -57,6 +58,10 @@ mutual
         layout.hoistedAt index = some forced → ScopedTermRel layout forced.term (.Var index)
     | hoist (forced : ForcedBuiltin) : ScopedTermRel (.insert forced layout) lhs body →
         ScopedTermRel layout lhs (.Apply (.Lam body) forced.term)
+    | forceDelaySaturated (first : Term) (rest : List Term) : ScopedTermRel .same lhs rhs →
+        ScopedTermRel .same
+          (.Force (applyParams (lambdaPrefix (rest.length + 1) (.Delay lhs)) (first :: rest)))
+          (applyParams (lambdaPrefix (rest.length + 1) rhs) (first :: rest))
 
   inductive ScopedTermsRel : Layout → List Term → List Term → Prop
     | nil : ScopedTermsRel layout [] []

@@ -33,7 +33,7 @@ private theorem eval_progress (variant : BuiltinSemanticsVariant)
     (related : ScopedTermRel layout lhs rhs) : EvalProgress variant layout lhs rhs := by
   refine ScopedTermRel.rec (motive_1 := fun layout lhs rhs _ => EvalProgress variant layout lhs rhs)
     (motive_2 := fun _ _ _ _ => True)
-    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ trivial
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ trivial
     (fun _ _ _ _ => trivial) related
   · intro _ n _ _ _ _ stacks envs
     exact ⟨0, 0, fun _ => rfl, eval_var_related variant stacks envs n⟩
@@ -84,6 +84,10 @@ private theorem eval_progress (variant : BuiltinSemanticsVariant)
     refine ⟨source, (2 * forced.forces + 5) + target, single, ?_⟩
     rw [Nat.add_assoc, stepN_add variant (2 * forced.forces + 5) (target + 1), forced.enterLet]
     exact next
+  · intro _ _ first rest bodies _ _ _ _ _ stacks envs
+    obtain ⟨source, target, next⟩ :=
+      eval_force_saturated_related variant stacks envs bodies TermRel.refl first rest
+    exact ⟨source, target, by simp [prepared], next⟩
 
 private theorem state_progress (variant : BuiltinSemanticsVariant)
     (related : StateRel ScopedTermRel lhs rhs) :
@@ -93,7 +97,7 @@ private theorem state_progress (variant : BuiltinSemanticsVariant)
   | eval stacks envs terms =>
     obtain ⟨left, right, _, next⟩ := eval_progress variant terms _ _ _ _ stacks envs
     exact ⟨left, right, next⟩
-  | ret stacks values => exact ⟨0, 0, return_step_related variant stacks values⟩
+  | ret stacks values => exact return_progress variant stacks values TermRel.refl
   | halt values => exact ⟨0, 0, .halt values⟩
   | error => exact ⟨0, 0, .error⟩
   | budgetExhausted => exact ⟨0, 0, .budgetExhausted⟩

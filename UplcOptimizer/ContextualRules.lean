@@ -11,6 +11,17 @@ open PlutusCore.UPLC.Term (Term)
 def ContextualRule (matcher : Term → Option Term) : Prop :=
   ∀ input output, matcher input = some output → TermRel input output
 
+theorem ContextualRule.ofChecked
+    (matcher : (input : Term) → Option { output : Term // TermRel input output }) :
+    ContextualRule (fun input => (matcher input).map Subtype.val) := by
+  intro input output matched
+  cases found : matcher input with
+  | none => simp [found] at matched
+  | some checked =>
+    simp only [found, Option.map_some, Option.some.injEq] at matched
+    subst output
+    exact checked.property
+
 initialize uplcContextualRuleAttr : TagAttribute ←
   registerTagAttribute `uplc_contextual_rule "register a contextually equivalent UPLC rewrite"
     (fun decl => do
@@ -25,6 +36,8 @@ structure ContextualMatch (input : Term) where
   theoremName : String
   output : Term
   proof : TermRel input output
+
+abbrev ContextualDispatch := (input : Term) → Option (ContextualMatch input)
 
 private def certifyMatch {matcher : Term → Option Term}
     (name : String) (rule : ContextualRule matcher)

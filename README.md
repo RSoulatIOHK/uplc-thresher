@@ -13,7 +13,7 @@ lake env lean --run Main.lean input.uplc --stats > optimized.uplc
 
 Use `--stats` for JSON on stderr with syntax node counts and rewrite counts. Node counts measure the AST. The benchmark encodes programs to measure Flat bytes.
 
-The default profile traverses the entire AST and applies only tagged theorems. Its rules cancel force/delay pairs, remove identity calls on immediate values, fold integer arithmetic and comparisons on literals, select nullary constructor cases and delayed boolean branches, and propagate errors through strict positions. After the local rewrites, it shares fully forced builtins in fresh outer bindings. The selector considers repeated uses and occurrences in explicit self-application loops.
+The default profile traverses the entire AST and applies only tagged theorems. It cancels force/delay pairs, including when the force surrounds an exactly saturated lambda application whose body starts with a delay. Other rules remove identity calls on immediate values, fold integer arithmetic and comparisons on literals, select nullary constructor cases and delayed boolean branches, and propagate errors through strict positions. After the deep traversal, the optimizer shares fully forced builtins in fresh outer bindings. The selector considers repeated uses and occurrences in explicit self-application loops.
 
 ## Proof of the deep optimizer
 
@@ -38,6 +38,8 @@ For local deep rewrites, tag a `StepRule lhs rhs` theorem with `@[uplc_deep_rule
 
 Builtin hoisting is registered with `@[uplc_contextual_rule]`. Its theorem certifies every output of its matcher. The CEK simulation tracks the new environment slots and how existing de Bruijn indices move. Each hoisted force chain must stop at a builtin value before any term argument is applied. See `UplcOptimizer/PolyBuiltin.lean`.
 
+Saturated force/delay cancellation also uses `@[uplc_contextual_rule]`. Its proof follows the original left-to-right argument evaluation, including arguments that fail or diverge. The final argument takes both executions into the same body with the same binder correspondence. See `UplcOptimizer/ForceDelay.lean`.
+
 Use fully applied constructors and literals in the left-hand side and capture each data parameter once. Theorems can include decidable premises on those parameters. If a premise fails, the dispatcher tries the next candidate. Candidates are tried in deterministic Lean name order.
 
 The root-only optimizer uses `@[uplc_rule]` for `CekJoin lhs rhs` theorems in `UplcOptimizer/LocalProofs.lean`. `def_uplc_rules myRules` and `certifiedRootWith myRules` provide the corresponding extension points.
@@ -48,6 +50,7 @@ The root-only optimizer uses `@[uplc_rule]` for `CekJoin lhs rhs` theorems in `U
 lake env lean Tests/TaggedRules.lean
 lake env lean Tests/DeepBehavior.lean
 lake env lean Tests/PolyBuiltin.lean
+lake env lean Tests/ForceDelay.lean
 python test_optimizer.py --aiken /path/to/aiken --bench
 ```
 

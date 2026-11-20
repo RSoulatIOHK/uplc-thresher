@@ -126,15 +126,8 @@ private def hoistResult (term : Term) : Option { output : Term // TermRel term o
 
 def hoistPolyBuiltin? (term : Term) : Option Term := (hoistResult term).map Subtype.val
 
-@[uplc_contextual_rule] theorem hoistPolyBuiltin_sound : ContextualRule hoistPolyBuiltin? := by
-  intro input output matched
-  unfold hoistPolyBuiltin? at matched
-  cases result : hoistResult input with
-  | none => simp [result] at matched
-  | some checked =>
-    simp only [result, Option.map_some, Option.some.injEq] at matched
-    subst output
-    exact checked.property
+@[uplc_contextual_rule] theorem hoistPolyBuiltin_sound : ContextualRule hoistPolyBuiltin? :=
+  .ofChecked hoistResult
 
 def_uplc_contextual_rules contextualRule
 
