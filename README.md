@@ -40,6 +40,8 @@ Builtin hoisting is registered with `@[uplc_contextual_rule]`. Its theorem certi
 
 Saturated force/delay cancellation also uses `@[uplc_contextual_rule]`. Its proof follows the original left-to-right argument evaluation, including arguments that fail or diverge. The final argument takes both executions into the same body with the same binder correspondence. See `UplcOptimizer/ForceDelay.lean`.
 
+The delayed `ifThenElse` rule removes the outer force and one delay from each arm when both arm bodies are constants, lambdas, or delays. Evaluating these immediate forms produces values without running lambda or delay bodies. The proof follows evaluation of the condition, then relates selection of the same arm or failure on a non-boolean condition. The optimizer tries this rule after local simplifications, including selection on a known boolean, and before fully forced builtin hoisting. See `UplcOptimizer/ForceIf.lean`.
+
 Use fully applied constructors and literals in the left-hand side and capture each data parameter once. Theorems can include decidable premises on those parameters. If a premise fails, the dispatcher tries the next candidate. Candidates are tried in deterministic Lean name order.
 
 The root-only optimizer uses `@[uplc_rule]` for `CekJoin lhs rhs` theorems in `UplcOptimizer/LocalProofs.lean`. `def_uplc_rules myRules` and `certifiedRootWith myRules` provide the corresponding extension points.
@@ -51,6 +53,7 @@ lake env lean Tests/TaggedRules.lean
 lake env lean Tests/DeepBehavior.lean
 lake env lean Tests/PolyBuiltin.lean
 lake env lean Tests/ForceDelay.lean
+lake env lean Tests/ForceIf.lean
 python test_optimizer.py --aiken /path/to/aiken --bench
 ```
 

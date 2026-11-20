@@ -1,5 +1,6 @@
 import UplcOptimizer.DeepScope
 import UplcOptimizer.Application
+import UplcOptimizer.Conditional
 
 namespace UplcOptimizer.Deep
 
@@ -62,6 +63,10 @@ mutual
         ScopedTermRel .same
           (.Force (applyParams (lambdaPrefix (rest.length + 1) (.Delay lhs)) (first :: rest)))
           (applyParams (lambdaPrefix (rest.length + 1) rhs) (first :: rest))
+    | forceIfThenElse (condition yes no : Term) :
+        immediateArm yes = true → immediateArm no = true →
+        ScopedTermRel .same (.Force (ifThenElseTerm condition (.Delay yes) (.Delay no)))
+          (ifThenElseTerm condition yes no)
 
   inductive ScopedTermsRel : Layout → List Term → List Term → Prop
     | nil : ScopedTermsRel layout [] []

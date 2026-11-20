@@ -1,4 +1,5 @@
 import UplcOptimizer.Application
+import UplcOptimizer.Conditional
 import UplcOptimizer.DeepValues
 import PlutusCore.UPLC.CekMachine
 
@@ -9,6 +10,11 @@ open PlutusCore.UPLC.Builtins
 open PlutusCore.UPLC.CekMachine
 open PlutusCore.UPLC.CekValue
 open PlutusCore.UPLC.Term
+
+private def ifConditionStack (stack : Stack) (env : Environment) (yes no : Term) : Stack :=
+  .RightApplicationOfValue (.VBuiltin .IfThenElse []
+    (.More .ArgV (.More .ArgV (.One .ArgV)))) ::
+  .LeftApplicationToTerm yes env :: .LeftApplicationToTerm no env :: stack
 
 inductive OptionRel {α : Type} (R : α → α → Prop) : Option α → Option α → Prop where
   | none : OptionRel R none none
@@ -63,6 +69,12 @@ inductive StackRel (R : Layout → Term → Term → Prop) : Stack → Stack →
           applicationFrames rest (.ForceFrame :: s) arguments)
         (.RightApplicationOfValue (.VLam (lambdaPrefix rest.length body') captured') ::
           applicationFrames rest t arguments')
+  /-- The condition is still being evaluated on both sides. Only the source
+  delays both arms and forces the selected result. -/
+  | delayedIf : StackRel R s t → EnvRel R .same e e' →
+      immediateArm yes = true → immediateArm no = true → StackRel R
+      (ifConditionStack (.ForceFrame :: s) e (.Delay yes) (.Delay no))
+      (ifConditionStack t e' yes no)
 
 inductive StateRel (R : Layout → Term → Term → Prop) : State → State → Prop where
   | eval : StackRel R stack stack' → EnvRel R layout env env' → R layout term term' →
@@ -235,8 +247,29 @@ private theorem return_step_related (variant : BuiltinSemanticsVariant) (frames 
       exact .eval (.cons (.constructorArgument (.cons values seen) rest envs) stacks) envs terms
   | caseScrutinee branches envs => exact case_related variant stacks envs branches values
 
+private theorem delayed_if_return (variant : BuiltinSemanticsVariant) (stacks : StackRel R s t)
+    (envs : EnvRel R .same e e') (condition : ValueRel R v w)
+    (refl : ∀ term, R .same term term) {yes no : Term}
+    (yesReady : immediateArm yes = true) (noReady : immediateArm no = true) :
+    StateRel R
+      (stepN variant 9 (.Return (ifConditionStack (.ForceFrame :: s) e (.Delay yes) (.Delay no)) v))
+      (stepN variant 7 (.Return (ifConditionStack t e' yes no) w)) := by
+  cases yes <;> cases no <;> simp only [immediateArm, Bool.false_eq_true] at yesReady noReady
+  all_goals
+    cases condition with
+    | const =>
+      rename_i c
+      cases c <;> try exact .error
+      rename_i b
+      cases b <;> first
+        | exact .ret stacks .const
+        | exact .ret stacks (.lam (layout := .same) (refl _) envs)
+        | exact .ret stacks (.delay (refl _) envs)
+    | _ => exact .error
+
 /-- A return transition preserves correspondence after one or more steps on
-both sides. Saturated spines advance to the next argument or enter the body. -/
+both sides. Saturated spines advance to the next argument or enter the body.
+The delayed conditional resumes with the selected arm's value or an error. -/
 theorem return_progress (variant : BuiltinSemanticsVariant) (stacks : StackRel R s t)
     (values : ValueRel R v w) (refl : ∀ term, R .same term term) :
     ∃ n m, StateRel R (stepN variant (n + 1) (.Return s v))
@@ -250,6 +283,8 @@ theorem return_progress (variant : BuiltinSemanticsVariant) (stacks : StackRel R
     | cons arg rest =>
       exact ⟨2, 2, .eval (.saturatedDelay rest stacks (captured.push values) arguments bodies)
         arguments (refl arg)⟩
+  | delayedIf stacks envs yesReady noReady =>
+    exact ⟨8, 6, delayed_if_return variant stacks envs values refl yesReady noReady⟩
 
 private theorem enterSaturatedCall (variant : BuiltinSemanticsVariant) (stack : Stack)
     (env : Environment) (body first : Term) (rest : List Term) :
@@ -279,6 +314,17 @@ theorem eval_force_saturated_related (variant : BuiltinSemanticsVariant) (stacks
       (applyParams (lambdaPrefix (rest.length + 1) rhs) (first :: rest))))
   rw [enterSaturatedCall, enterSaturatedCall]
   exact .eval (.saturatedDelay rest stacks envs envs related) envs (refl first)
+
+/-- Enter the shared condition before running either arm. Both right-hand
+arms are immediate values, permitting the selected value to be returned
+without the source's force and delay steps. -/
+theorem eval_force_if_then_else_related (variant : BuiltinSemanticsVariant) (stacks : StackRel R s t)
+    (envs : EnvRel R .same e e') (refl : ∀ term, R .same term term) (cond yes no : Term)
+    (yesReady : immediateArm yes = true) (noReady : immediateArm no = true) :
+    ∃ n m, StateRel R
+      (stepN variant (n + 1) (.Eval s e (.Force (ifThenElseTerm cond (.Delay yes) (.Delay no)))))
+      (stepN variant (m + 1) (.Eval t e' (ifThenElseTerm cond yes no))) :=
+  ⟨7, 6, .eval (.delayedIf stacks envs yesReady noReady) envs (refl cond)⟩
 
 theorem eval_var_related (variant : BuiltinSemanticsVariant) (stacks : StackRel R s t)
     (envs : EnvRel R layout e e') (idx : Nat) :

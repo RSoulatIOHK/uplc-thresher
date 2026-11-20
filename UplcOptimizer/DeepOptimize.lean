@@ -20,6 +20,9 @@ private structure RewriteCounts where
 private def RewriteCounts.add (a b : RewriteCounts) : RewriteCounts :=
   ⟨a.localSteps + b.localSteps, a.contextualRules ++ b.contextualRules⟩
 
+private def RewriteCounts.total (counts : RewriteCounts) : Nat :=
+  counts.localSteps + counts.contextualRules.length
+
 private abbrev SweepResult (before : Term) :=
   { result : Term × RewriteCounts // TermRel before result.1 }
 
@@ -105,17 +108,25 @@ mutual
   decreasing_by all_goals simp_wf <;> omega
 end
 
-private def optimizeTermWithFuel (rewrite : RuleDispatch) (contextual : ContextualDispatch) :
+private def optimizeTermWithFuel (rewrite : RuleDispatch) (contextual : ContextualDispatch)
+    (late : Option ContextualDispatch) :
     (fuel : Nat) → (term : Term) → { result : Term × DeepStats // TermRel.Chain term result.1 }
   | 0, term => ⟨(term, {}), .refl term⟩
   | fuel + 1, term =>
-    let first := sweep rewrite contextual (termDepth term) term
+    let depth := termDepth term
+    let early := sweep rewrite contextual depth term
+    -- Give local simplifications, including selection on a known condition,
+    -- priority over a contextual rewrite that changes the branch shape.
+    let first := match late with
+      | some dispatch =>
+        if early.val.2.total == 0 then sweep (fun _ => none) dispatch depth term else early
+      | none => early
     let counts := first.val.2
-    let rewrites := counts.localSteps + counts.contextualRules.length
+    let rewrites := counts.total
     if rewrites == 0 then
       ⟨(term, { sweeps := 1 }), .refl term⟩
     else
-      let rest := optimizeTermWithFuel rewrite contextual fuel first.val.1
+      let rest := optimizeTermWithFuel rewrite contextual late fuel first.val.1
       let stats : DeepStats :=
         { rewrites := rewrites + rest.val.2.rewrites
           sweeps := 1 + rest.val.2.sweeps
@@ -124,8 +135,8 @@ private def optimizeTermWithFuel (rewrite : RuleDispatch) (contextual : Contextu
 
 /-- Traverse the term and repeat until no rule fires or the sweep limit is reached. -/
 def optimizeTerm (rewrite : RuleDispatch) (term : Term) (maxSweeps : Nat := 12)
-    (contextual : ContextualDispatch := fun _ => none) :
+    (contextual : ContextualDispatch := fun _ => none) (late : Option ContextualDispatch := none) :
     { result : Term × DeepStats // TermRel.Chain term result.1 } :=
-  optimizeTermWithFuel rewrite contextual maxSweeps term
+  optimizeTermWithFuel rewrite contextual late maxSweeps term
 
 end UplcOptimizer.Deep
