@@ -1,6 +1,7 @@
 import UplcOptimizer.DeepScope
 import UplcOptimizer.Application
 import UplcOptimizer.Conditional
+import UplcOptimizer.Dominates
 
 namespace UplcOptimizer.Deep
 
@@ -75,6 +76,11 @@ mutual
         immediateArm yes = true → immediateArm no = true →
         ScopedTermRel .same (ifThenElseTerm condition yes no)
           (.Case (.Constr 0 [condition, yes, no]) [.Force (.Builtin .IfThenElse)])
+    | cachedReference (expr : CacheExpr) (index : Nat) :
+        layout.cachedAt index = some expr → ScopedTermRel layout expr.term (.Var index)
+    | shareCommonProjection (expr : CacheExpr) (first : FirstUse expr.term lhs)
+        (active : prepared lhs = false) : ScopedTermRel (.cache expr .same) lhs body →
+        ScopedTermRel .same lhs (.Apply (.Lam body) expr.term)
 
   inductive ScopedTermsRel : Layout → List Term → List Term → Prop
     | nil : ScopedTermsRel layout [] []

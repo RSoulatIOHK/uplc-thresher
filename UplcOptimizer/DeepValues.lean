@@ -29,8 +29,8 @@ mutual
         ValueRel R left right → ValueListRel R leftTail rightTail →
         ValueListRel R (left :: leftTail) (right :: rightTail)
 
-  /-- Align each original environment slot with a target slot, and require
-  every added slot to contain exactly the builtin value declared by its layout. -/
+  /-- Align each original environment slot with a target slot. Each added slot
+  carries either the declared builtin value or a related projection result. -/
   inductive EnvRel (R : Layout → Term → Term → Prop) :
       Layout → List CekValue → List CekValue → Prop where
     | same : ValueListRel R left right → EnvRel R .same left right
@@ -38,6 +38,8 @@ mutual
         EnvRel R (.keep layout) (left :: leftTail) (right :: rightTail)
     | insert (forced : ForcedBuiltin) : EnvRel R layout left right →
         EnvRel R (.insert forced layout) left (forced.value :: right)
+    | cache (expr : CacheExpr) : expr.eval left = some original → ValueRel R original result →
+        EnvRel R layout left right → EnvRel R (.cache expr layout) left (result :: right)
 end
 
 inductive ValueOptionRel (R : Layout → Term → Term → Prop) : Option CekValue → Option CekValue → Prop where
@@ -80,6 +82,7 @@ theorem EnvRel.push {layout left right x y} (related : EnvRel R layout left righ
   | same values => exact .same (.cons heads values)
   | keep values tail => exact .keep heads (.keep values tail)
   | insert forced tail => exact .keep heads (.insert forced tail)
+  | cache expr evaluated values tail => exact .keep heads (.cache expr evaluated values tail)
 
 theorem EnvRel.lookup {layout left right} (related : EnvRel R layout left right) (index : Nat) :
     ValueOptionRel R left[index]? right[layout.rename index]? := by
@@ -88,6 +91,7 @@ theorem EnvRel.lookup {layout left right} (related : EnvRel R layout left right)
   | .keep values _, 0 => exact .some values
   | .keep _ tail, idx + 1 => exact tail.lookup idx
   | .insert _ tail, idx => exact tail.lookup idx
+  | .cache _ _ _ tail, idx => exact tail.lookup idx
 
 theorem EnvRel.hoistedLookup {layout left right index forced}
     (related : EnvRel R layout left right) (selected : layout.hoistedAt index = some forced) :
@@ -101,6 +105,28 @@ theorem EnvRel.hoistedLookup {layout left right index forced}
     cases Option.some.inj selected
     rfl
   | .insert _ tail, _ + 1 => exact tail.hoistedLookup selected
+  | .cache _ _ _ _, 0 => simp [Layout.hoistedAt] at selected
+  | .cache _ _ _ tail, _ + 1 => exact tail.hoistedLookup selected
+
+theorem EnvRel.cachedLookup {layout left right index expr}
+    (related : EnvRel R layout left right) (selected : layout.cachedAt index = some expr) :
+    ∃ original result, expr.eval left = some original ∧ right[index]? = some result ∧
+      ValueRel R original result := by
+  match related, index with
+  | .same _, _ => simp [Layout.cachedAt] at selected
+  | .keep _ _, 0 => simp [Layout.cachedAt] at selected
+  | .keep _ tail, _ + 1 =>
+    simp only [Layout.cachedAt, Option.map_eq_some_iff] at selected
+    obtain ⟨stored, found, rfl⟩ := selected
+    obtain ⟨original, result, evaluated, lookup, values⟩ := tail.cachedLookup found
+    exact ⟨original, result, by simpa only [CacheExpr.eval_shift] using evaluated, lookup, values⟩
+  | .insert _ _, 0 => simp [Layout.cachedAt] at selected
+  | .insert _ tail, _ + 1 => exact tail.cachedLookup selected
+  | .cache cached evaluated values _, 0 =>
+    change some cached = some expr at selected
+    cases Option.some.inj selected
+    exact ⟨_, _, evaluated, rfl, values⟩
+  | .cache _ _ _ tail, _ + 1 => exact tail.cachedLookup selected
 
 private theorem ValueOptionRel.bindSame {α : Type} (input : Option α)
     {left right : α → Option CekValue}

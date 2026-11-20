@@ -24,6 +24,19 @@ private theorem application_not_prepared (fn arg : Term) (rest : List Term) :
   | nil => rfl
   | cons next _ ih => exact ih (.Apply fn arg) next
 
+private theorem cache_eval_related (expr : CacheExpr) (envs : EnvRel ScopedTermRel .same left right) :
+    ValueOptionRel ScopedTermRel (expr.eval left) (expr.eval right) := by
+  induction expr with
+  | var index => exact envs.lookup index
+  | const value => exact .some .const
+  | project op arg ih =>
+    simp only [CacheExpr.eval]
+    generalize arg.eval left = leftValue at ih ⊢
+    generalize arg.eval right = rightValue at ih ⊢
+    cases ih with
+    | none => exact .none
+    | some value => exact builtin_related default op.builtin (.cons value .nil)
+
 private def EvalProgress (variant : BuiltinSemanticsVariant) (layout : Layout)
     (lhs rhs : Term) : Prop :=
     ∀ (left right : Stack) (env env' : Environment), StackRel ScopedTermRel left right →
@@ -39,7 +52,7 @@ private theorem eval_progress (variant : BuiltinSemanticsVariant)
     (related : ScopedTermRel layout lhs rhs) : EvalProgress variant layout lhs rhs := by
   refine ScopedTermRel.rec (motive_1 := fun layout lhs rhs _ => EvalProgress variant layout lhs rhs)
     (motive_2 := fun _ _ _ _ => True)
-    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ trivial
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ trivial
     (fun _ _ _ _ => trivial) related
   · intro _ n _ _ _ _ stacks envs
     exact ⟨0, 0, fun _ => rfl, eval_var_related variant stacks envs n⟩
@@ -108,6 +121,32 @@ private theorem eval_progress (variant : BuiltinSemanticsVariant)
       eval_apply_if_to_case_related variant stacks envs TermRel.refl
         condition yes no yesReady noReady
     exact ⟨source, target, by simp [prepared, ifThenElseTerm], next⟩
+  · intro _ expr index found _ _ env _ stacks envs
+    obtain ⟨original, result, evaluated, lookup, values⟩ := envs.cachedLookup found
+    let count := expr.steps - 1
+    have duration : count + 1 = expr.steps := Nat.sub_add_cancel expr.steps_pos
+    refine ⟨count, 0, ?_, ?_⟩
+    · cases expr <;> simp [count, CacheExpr.term, CacheExpr.steps, prepared]
+    · rw [duration, expr.run, evaluated]
+      simp only [stepN, step, List.get?Internal_eq_getElem?, lookup]
+      exact .ret stacks values
+  · intro _ body expr first active _ ih left right env env' stacks envs
+    have values := cache_eval_related expr envs
+    generalize sourceEval : expr.eval env = evaluated at values
+    generalize targetEval : expr.eval env' = initialized at values
+    cases values with
+    | none =>
+      obtain ⟨source, failed⟩ := first.error sourceEval variant left
+      refine ⟨source, expr.steps + 3, by simp [active], ?_⟩
+      rw [failed, show expr.steps + 3 + 1 = expr.steps + 4 by omega, expr.enterLet, targetEval]
+      exact .error
+    | @some original result values =>
+      obtain ⟨source, target, single, next⟩ := ih left right env (result :: env') stacks
+        (.cache expr sourceEval values envs)
+      refine ⟨source, (expr.steps + 4) + target, single, ?_⟩
+      rw [Nat.add_assoc (expr.steps + 4), stepN_add variant (expr.steps + 4) (target + 1),
+        expr.enterLet, targetEval]
+      exact next
 
 private theorem state_progress (variant : BuiltinSemanticsVariant)
     (related : StateRel ScopedTermRel lhs rhs) :

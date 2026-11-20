@@ -1,4 +1,5 @@
 import UplcOptimizer.ApplyToCase
+import UplcOptimizer.Cse
 import UplcOptimizer.DeepBehavior
 import UplcOptimizer.DeepOptimize
 import UplcOptimizer.DeepRules
@@ -31,7 +32,7 @@ def optimizeWithProof (program : Program) (maxSweeps : Nat := 12) :
   match program with
   | .Program version term =>
     let optimized := Deep.optimizeTerm Deep.rootRule term maxSweeps
-      Deep.forceDelayRule (some Deep.forceIfRule) (Deep.applyToCaseRules version)
+      Deep.forceDelayRule (some Deep.forceIfRule) (Deep.applyToCaseRules version ++ [Deep.cseRule])
     let counts := optimized.val.2
     let localSteps := counts.rewrites - counts.contextualRules.length
     let byRule : Std.HashMap String Nat :=

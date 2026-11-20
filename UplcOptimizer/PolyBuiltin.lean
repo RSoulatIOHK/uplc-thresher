@@ -1,4 +1,5 @@
 import UplcOptimizer.ContextualRules
+import UplcOptimizer.Sharing
 import PlutusCore.UPLC.Term.Instances
 
 namespace UplcOptimizer.Deep
@@ -20,58 +21,22 @@ private def reference? (term : Term) : (layout : Layout) → Option (Reference l
       some ⟨forced, 0, rfl, h⟩
     else
       (reference? term tail).map fun ref => ⟨ref.forced, ref.index + 1, ref.found, ref.same⟩
+  | .cache _ tail => (reference? term tail).map fun ref =>
+      ⟨ref.forced, ref.index + 1, ref.found, ref.same⟩
 
-mutual
-  private def shareBody (layout : Layout) (term : Term) :
-      { output : Term // ScopedTermRel layout term output } :=
-    if let some ref := reference? term layout then
-      ⟨.Var ref.index, by
-        rcases ref with ⟨forced, index, found, same⟩
-        change ScopedTermRel layout term (.Var index)
-        rw [same]
-        exact .reference forced index found⟩
-    else
-      match term with
-      | .Var index => ⟨.Var (layout.rename index), .var index⟩
-      | .Const value => ⟨.Const value, .const value⟩
-      | .Builtin builtin => ⟨.Builtin builtin, .builtin builtin⟩
-      | .Error => ⟨.Error, .error⟩
-      | .Lam body =>
-        let result := shareBody layout.underBinder body
-        ⟨.Lam result.val, .lam result.property⟩
-      | .Delay body =>
-        let result := shareBody layout body
-        ⟨.Delay result.val, .delay result.property⟩
-      | .Force body =>
-        let result := shareBody layout body
-        ⟨.Force result.val, .force result.property⟩
-      | .Apply fn arg =>
-        let fn := shareBody layout fn
-        let arg := shareBody layout arg
-        ⟨.Apply fn.val arg.val, .apply fn.property arg.property⟩
-      | .Constr tag fields =>
-        let result := shareChildren layout fields
-        ⟨.Constr tag result.val, .constr tag result.property⟩
-      | .Case scrutinee branches =>
-        let result := shareBody layout scrutinee
-        let arms := shareChildren layout branches
-        ⟨.Case result.val arms.val, .case result.property arms.property⟩
-  termination_by sizeOf term
-
-  private def shareChildren (layout : Layout) (terms : List Term) :
-      { output : List Term // ScopedTermsRel layout terms output } :=
-    match terms with
-    | [] => ⟨[], .nil⟩
-    | term :: rest =>
-      let head := shareBody layout term
-      let tail := shareChildren layout rest
-      ⟨head.val :: tail.val, .cons head.property tail.property⟩
-  termination_by sizeOf terms
-end
+private def substituteForced : Substitute := fun layout term => do
+  let ref ← reference? term layout
+  return ⟨.Var ref.index, by
+    rcases ref with ⟨forced, index, found, same⟩
+    change ScopedTermRel layout term (.Var index)
+    rw [same]
+    exact .reference forced index found⟩
 
 private def bindAll (term : Term) (layout : Layout) : (builtins : List ForcedBuiltin) →
     { output : Term // ScopedTermRel layout term output }
-  | [] => shareBody layout term
+  | [] =>
+    let body := rewriteShared substituteForced layout term
+    ⟨body.output, body.proof⟩
   | forced :: rest =>
     let body := bindAll term (.insert forced layout) rest
     ⟨.Apply (.Lam body.val) forced.term, .hoist forced body.property⟩

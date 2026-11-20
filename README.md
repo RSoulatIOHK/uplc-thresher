@@ -46,6 +46,8 @@ For UPLC 1.1 and later, ApplyToCase packs three or more arguments into a constru
 
 Use fully applied constructors and literals in the left-hand side and capture each data parameter once. Theorems can include decidable premises on those parameters. If a premise fails, the dispatcher tries the next candidate. Candidates are tried in deterministic Lean name order.
 
+Common subexpression elimination shares repeated Data, list, and pair projections when an existing occurrence is evaluated first. The rule binds that result once and replaces matching uses with a capture-safe lookup, including uses under binders. A failed projection still occurs before other potentially failing or diverging work. See `UplcOptimizer/Cse.lean`.
+
 The root-only optimizer uses `@[uplc_rule]` for `CekJoin lhs rhs` theorems in `UplcOptimizer/LocalProofs.lean`. `def_uplc_rules myRules` and `certifiedRootWith myRules` provide the corresponding extension points.
 
 ## Test and benchmark
@@ -57,6 +59,7 @@ lake env lean Tests/PolyBuiltin.lean
 lake env lean Tests/ForceDelay.lean
 lake env lean Tests/ForceIf.lean
 lake env lean Tests/ApplyToCase.lean
+lake env lean Tests/Cse.lean
 python test_optimizer.py --aiken /path/to/aiken --bench
 ```
 
