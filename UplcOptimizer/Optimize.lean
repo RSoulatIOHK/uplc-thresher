@@ -1,4 +1,4 @@
-import PlutusCore.UPLC.Term
+import UplcOptimizer.Certified
 
 namespace UplcOptimizer
 
@@ -90,7 +90,6 @@ private partial def demandsBinderFirst (depth : Nat) : Term → Bool
 
 private def foldIntegerBinary (builtin : BuiltinFun) (a b : Int) : Option Const :=
   match builtin with
-  | .AddInteger => some (.Integer (a + b))
   | .SubtractInteger => some (.Integer (a - b))
   | .MultiplyInteger => some (.Integer (a * b))
   | .EqualsInteger => some (.Bool (a == b))
@@ -98,9 +97,8 @@ private def foldIntegerBinary (builtin : BuiltinFun) (a b : Int) : Option Const 
   | .LessThanEqualsInteger => some (.Bool (decide (a ≤ b)))
   | _ => none
 
-private def rewrite (depth : Nat) (term : Term) : Option (String × Term) :=
+private def rewriteDeep (depth : Nat) (term : Term) : Option (String × Term) :=
   match term with
-  | .Force (.Delay body) => some ("force-delay", body)
   | .Apply (.Lam (.Var 0)) arg => some ("identity", arg)
   | .Force .Error | .Apply .Error _ | .Apply (.Lam _) .Error | .Case .Error _ =>
       some ("propagate-error", .Error)
@@ -129,6 +127,11 @@ private def rewrite (depth : Nat) (term : Term) : Option (String × Term) :=
       let result ← foldIntegerBinary builtin a b
       some ("fold-integer", .Const result)
   | _ => none
+
+private def rewrite (depth : Nat) (term : Term) : Option (String × Term) :=
+  match rootRule term with
+  | some result => some ("theorem-rule", result.val)
+  | none => rewriteDeep depth term
 
 structure Stats where
   rewrites : Nat := 0

@@ -7,28 +7,22 @@ open PlutusCore.UPLC.CekMachine
 open PlutusCore.UPLC.CekValue
 open PlutusCore.UPLC.Term
 
-private def rootRule : (term : Term) → Option { result : Term // CekJoin term result }
-  | .Force (.Delay body) => some ⟨body, forceDelay_join body⟩
-  | .Apply (.Lam (.Var 0)) (.Const constant) =>
-    some ⟨.Const constant, strictIdentityConst_join constant⟩
-  | .Apply (.Apply (.Builtin .AddInteger) (.Const (.Integer left))) (.Const (.Integer right)) =>
-    some ⟨.Const (.Integer (left + right)), addIntegerConst_join left right⟩
-  | .Case (.Constr tag []) branches =>
-    match selected : branches[tag]? with
-    | some branch => some ⟨branch, caseNullaryConstr_join selected⟩
-    | none => none
-  | _ => none
+def_uplc_rules rootRule
 
-/-- Apply at most `fuel` shrinking root rewrites. The second result is the
-number of rewrites performed. Each output carries an exact CEK join. -/
-def certifiedRoot : (fuel : Nat) → (term : Term) → { result : Term × Nat // CekJoin term result.1 }
+/-- Apply a proof-producing root dispatcher at most `fuel` times. The second
+result records the number of rewrites performed. -/
+def certifiedRootWith (rewrite : (term : Term) → Option { result : Term // CekJoin term result }) :
+    (fuel : Nat) → (term : Term) → { result : Term × Nat // CekJoin term result.1 }
   | 0, term => ⟨(term, 0), CekJoin.refl term⟩
   | fuel + 1, term =>
-    match rootRule term with
+    match rewrite term with
     | none => ⟨(term, 0), CekJoin.refl term⟩
     | some first =>
-      let rest := certifiedRoot fuel first.1
+      let rest := certifiedRootWith rewrite fuel first.1
       ⟨(rest.1.1, rest.1.2 + 1), first.2.trans rest.2⟩
+
+/-- Apply the rules generated from the standard tagged theorems. -/
+def certifiedRoot := certifiedRootWith rootRule
 
 private def applicationFrames (args : List Term) (stack : Stack) (env : Environment) : Stack :=
   args.foldr (fun arg rest => .LeftApplicationToTerm arg env :: rest) stack

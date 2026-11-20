@@ -1,4 +1,5 @@
 import PlutusCore.UPLC.CekMachine
+import UplcOptimizer.TaggedRules
 
 namespace UplcOptimizer
 
@@ -137,16 +138,16 @@ theorem CekJoin.programResult_iff {lhs rhs : Term} {args : List Term}
   simp only [cekExecuteProgramWithSemanticVariant, initialState, runSteps_observed]
   exact joined.reaches_iff variant [] [] (observedState_fixed variant result)
 
-theorem forceDelay_join (body : Term) : CekJoin (.Force (.Delay body)) body := by
+@[uplc_rule] theorem forceDelay_join (body : Term) : CekJoin (.Force (.Delay body)) body := by
   intro variant stack env
   exact ⟨3, 0, rfl⟩
 
-theorem strictIdentityConst_join (constant : Const) :
+@[uplc_rule] theorem strictIdentityConst_join (constant : Const) :
     CekJoin (.Apply (.Lam (.Var 0)) (.Const constant)) (.Const constant) := by
   intro variant stack env
   exact ⟨6, 1, rfl⟩
 
-theorem addIntegerConst_join (left right : Int) :
+@[uplc_rule] theorem addIntegerConst_join (left right : Int) :
     CekJoin (.Apply (.Apply (.Builtin .AddInteger) (.Const (.Integer left)))
       (.Const (.Integer right))) (.Const (.Integer (left + right))) := by
   intro variant stack env
@@ -161,5 +162,17 @@ theorem caseNullaryConstr_join {tag : Nat} {branches : List Term} {branch : Term
     | some found => State.Eval stack env found
     | none => State.Error) = State.Eval stack env branch
   simp only [List.get?Internal_eq_getElem?, selected]
+
+@[uplc_rule] theorem selectNullaryCase_join (tag : Nat) (branches : List Term) :
+    CekJoin (.Case (.Constr tag []) branches) (branches[tag]?.getD .Error) := by
+  cases selected : branches[tag]? with
+  | some branch => exact caseNullaryConstr_join selected
+  | none =>
+    intro variant stack env
+    refine ⟨3, 1, ?_⟩
+    change (match List.get?Internal branches tag with
+      | some found => State.Eval stack env found
+      | none => State.Error) = State.Error
+    simp only [List.get?Internal_eq_getElem?, selected]
 
 end UplcOptimizer
