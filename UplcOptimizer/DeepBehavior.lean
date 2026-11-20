@@ -18,6 +18,12 @@ private theorem step_prepared (ready : prepared t = true) (variant : BuiltinSema
     (stack : Stack) (env : Environment) : step variant (.Eval stack env t) = prepare stack env t := by
   cases t <;> simp_all [prepared, prepare, step]
 
+private theorem application_not_prepared (fn arg : Term) (rest : List Term) :
+    prepared (applyParams fn (arg :: rest)) = false := by
+  induction rest generalizing fn arg with
+  | nil => rfl
+  | cons next _ ih => exact ih (.Apply fn arg) next
+
 private def EvalProgress (variant : BuiltinSemanticsVariant) (layout : Layout)
     (lhs rhs : Term) : Prop :=
     ∀ (left right : Stack) (env env' : Environment), StackRel ScopedTermRel left right →
@@ -33,7 +39,7 @@ private theorem eval_progress (variant : BuiltinSemanticsVariant)
     (related : ScopedTermRel layout lhs rhs) : EvalProgress variant layout lhs rhs := by
   refine ScopedTermRel.rec (motive_1 := fun layout lhs rhs _ => EvalProgress variant layout lhs rhs)
     (motive_2 := fun _ _ _ _ => True)
-    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ trivial
+    ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_ trivial
     (fun _ _ _ _ => trivial) related
   · intro _ n _ _ _ _ stacks envs
     exact ⟨0, 0, fun _ => rfl, eval_var_related variant stacks envs n⟩
@@ -93,6 +99,15 @@ private theorem eval_progress (variant : BuiltinSemanticsVariant)
       eval_force_if_then_else_related variant stacks envs TermRel.refl
         condition yes no yesReady noReady
     exact ⟨source, target, by simp [prepared], next⟩
+  · intro _ _ first rest bodies _ _ _ _ _ stacks envs
+    obtain ⟨source, target, next⟩ :=
+      eval_apply_lambda_to_case_related variant stacks envs bodies TermRel.refl first rest
+    exact ⟨source, target, by simp [application_not_prepared], next⟩
+  · intro condition yes no yesReady noReady _ _ _ _ stacks envs
+    obtain ⟨source, target, next⟩ :=
+      eval_apply_if_to_case_related variant stacks envs TermRel.refl
+        condition yes no yesReady noReady
+    exact ⟨source, target, by simp [prepared, ifThenElseTerm], next⟩
 
 private theorem state_progress (variant : BuiltinSemanticsVariant)
     (related : StateRel ScopedTermRel lhs rhs) :

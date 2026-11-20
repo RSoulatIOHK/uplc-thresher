@@ -67,6 +67,14 @@ mutual
         immediateArm yes = true → immediateArm no = true →
         ScopedTermRel .same (.Force (ifThenElseTerm condition (.Delay yes) (.Delay no)))
           (ifThenElseTerm condition yes no)
+    | packLambdaApplications (first : Term) (rest : List Term) :
+        ScopedTermRel .same lhs rhs → ScopedTermRel .same
+          (applyParams (lambdaPrefix (rest.length + 1) lhs) (first :: rest))
+          (.Case (.Constr 0 (first :: rest)) [lambdaPrefix (rest.length + 1) rhs])
+    | packConditionalApplications (condition yes no : Term) :
+        immediateArm yes = true → immediateArm no = true →
+        ScopedTermRel .same (ifThenElseTerm condition yes no)
+          (.Case (.Constr 0 [condition, yes, no]) [.Force (.Builtin .IfThenElse)])
 
   inductive ScopedTermsRel : Layout → List Term → List Term → Prop
     | nil : ScopedTermsRel layout [] []

@@ -68,7 +68,7 @@ private def plain : Program := .Program version (.Lam (.Apply (.Builtin .AddInte
 #guard bodyOf (optimize plain).1 == bodyOf plain
 #guard (optimize plain).2.rewrites == 0
 
-private def cold : Program := .Program version (.Lam (choose (.Var 0) (integer 1) (integer 2)))
+private def cold : Program := .Program (.Version 1 0 0) (.Lam (choose (.Var 0) (integer 1) (integer 2)))
 
 #guard bodyOf (optimize cold).1 == bodyOf cold
 

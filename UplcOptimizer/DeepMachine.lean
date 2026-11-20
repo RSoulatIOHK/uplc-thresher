@@ -75,6 +75,22 @@ inductive StackRel (R : Layout → Term → Term → Prop) : Stack → Stack →
       immediateArm yes = true → immediateArm no = true → StackRel R
       (ifConditionStack (.ForceFrame :: s) e (.Delay yes) (.Delay no))
       (ifConditionStack t e' yes no)
+  /-- The source has bound each finished argument, while the target saves
+  those values in reverse order for the case branch. -/
+  | applicationCase (arity : Nat) (seen : List CekValue) (rest : List Term) :
+      StackRel R s t → EnvRel R .same arguments arguments' →
+      EnvRel R .same captured (seen ++ arguments') → R .same body body' →
+      arity = rest.length + 1 + seen.length → StackRel R
+        (.RightApplicationOfValue (.VLam (lambdaPrefix rest.length body) captured) ::
+          applicationFrames rest s arguments)
+        (.ConstructorArgument 0 seen rest arguments' ::
+          .CaseScrutinee [lambdaPrefix arity body'] arguments' :: t)
+  /-- A packed conditional evaluates the condition before its immediate arms. -/
+  | packIf : StackRel R s t → EnvRel R .same e e' →
+      immediateArm yes = true → immediateArm no = true → StackRel R
+      (ifConditionStack s e yes no)
+      (.ConstructorArgument 0 [] [yes, no] e' ::
+        .CaseScrutinee [.Force (.Builtin .IfThenElse)] e' :: t)
 
 inductive StateRel (R : Layout → Term → Term → Prop) : State → State → Prop where
   | eval : StackRel R stack stack' → EnvRel R layout env env' → R layout term term' →
@@ -267,9 +283,76 @@ private theorem delayed_if_return (variant : BuiltinSemanticsVariant) (stacks : 
         | exact .ret stacks (.delay (refl _) envs)
     | _ => exact .error
 
+private theorem replay_lambda_fields (variant : BuiltinSemanticsVariant)
+    (fields : List CekValue) (body : Term) (env : Environment) (stack : Stack) :
+    stepN variant (2 * fields.length)
+      (.Eval (step.folding fields stack) env (lambdaPrefix fields.length body)) =
+      .Eval stack (fields.reverse ++ env) body := by
+  induction fields generalizing env with
+  | nil => rfl
+  | cons field rest ih =>
+    rw [show 2 * (field :: rest).length = 2 + 2 * rest.length by simp; omega, stepN_add]
+    change stepN variant (2 * rest.length)
+      (.Eval (step.folding rest stack) (field :: env) (lambdaPrefix rest.length body)) = _
+    rw [ih]
+    simp [List.reverse_cons, List.append_assoc]
+
+private theorem application_case_return (variant : BuiltinSemanticsVariant)
+    (arity : Nat) (seen : List CekValue) (rest : List Term) (stacks : StackRel R s t)
+    (arguments : EnvRel R .same argsEnv argsEnv')
+    (captured : EnvRel R .same capturedEnv (seen ++ argsEnv'))
+    (bodies : R .same lhs rhs) (remaining : arity = rest.length + 1 + seen.length)
+    (values : ValueRel R v w) (refl : ∀ term, R .same term term) :
+    ∃ n m, StateRel R
+      (stepN variant (n + 1) (.Return
+        (.RightApplicationOfValue (.VLam (lambdaPrefix rest.length lhs) capturedEnv) ::
+          applicationFrames rest s argsEnv) v))
+      (stepN variant (m + 1) (.Return (.ConstructorArgument 0 seen rest argsEnv' ::
+        .CaseScrutinee [lambdaPrefix arity rhs] argsEnv' :: t) w)) := by
+  cases rest with
+  | nil =>
+    let fields := (w :: seen).reverse
+    have fieldCount : fields.length = arity := by
+      simp only [fields, List.length_reverse, List.length_cons, List.length_nil] at remaining ⊢
+      omega
+    have enter := replay_lambda_fields variant fields rhs argsEnv' t
+    rw [fieldCount] at enter
+    refine ⟨0, 2 * arity + 1, ?_⟩
+    rw [show 2 * arity + 1 + 1 = 2 + 2 * arity by omega, stepN_add variant 2]
+    change StateRel R (.Eval s (v :: capturedEnv) lhs)
+      (stepN variant (2 * arity) (.Eval (step.folding fields t) argsEnv' (lambdaPrefix arity rhs)))
+    rw [enter, show fields.reverse ++ argsEnv' = w :: (seen ++ argsEnv') by simp [fields]]
+    exact .eval stacks (captured.push values) bodies
+  | cons arg rest =>
+    have next : arity = rest.length + 1 + (w :: seen).length := by
+      simp only [List.length_cons] at remaining ⊢
+      omega
+    exact ⟨2, 0, .eval (.applicationCase arity (w :: seen) rest stacks arguments
+      (captured.push values) bodies next) arguments (refl arg)⟩
+
+private theorem packed_if_return (variant : BuiltinSemanticsVariant) (stacks : StackRel R s t)
+    (envs : EnvRel R .same e e') (condition : ValueRel R v w)
+    (refl : ∀ term, R .same term term) {yes no : Term}
+    (yesReady : immediateArm yes = true) (noReady : immediateArm no = true) :
+    StateRel R (stepN variant 7 (.Return (ifConditionStack s e yes no) v))
+      (stepN variant 12 (.Return (.ConstructorArgument 0 [] [yes, no] e' ::
+        .CaseScrutinee [.Force (.Builtin .IfThenElse)] e' :: t) w)) := by
+  cases yes <;> cases no <;> simp only [immediateArm, Bool.false_eq_true] at yesReady noReady
+  all_goals
+    cases condition with
+    | const =>
+      rename_i c
+      cases c <;> try exact .error
+      rename_i b
+      cases b <;> first
+        | exact .ret stacks .const
+        | exact .ret stacks (.lam (layout := .same) (refl _) envs)
+        | exact .ret stacks (.delay (refl _) envs)
+    | _ => exact .error
+
 /-- A return transition preserves correspondence after one or more steps on
 both sides. Saturated spines advance to the next argument or enter the body.
-The delayed conditional resumes with the selected arm's value or an error. -/
+Conditionals resume with the selected arm's value or an error. -/
 theorem return_progress (variant : BuiltinSemanticsVariant) (stacks : StackRel R s t)
     (values : ValueRel R v w) (refl : ∀ term, R .same term term) :
     ∃ n m, StateRel R (stepN variant (n + 1) (.Return s v))
@@ -285,6 +368,11 @@ theorem return_progress (variant : BuiltinSemanticsVariant) (stacks : StackRel R
         arguments (refl arg)⟩
   | delayedIf stacks envs yesReady noReady =>
     exact ⟨8, 6, delayed_if_return variant stacks envs values refl yesReady noReady⟩
+  | applicationCase arity seen rest stacks arguments captured bodies remaining =>
+    exact application_case_return variant arity seen rest stacks arguments captured bodies
+      remaining values refl
+  | packIf stacks envs yesReady noReady =>
+    exact ⟨6, 11, packed_if_return variant stacks envs values refl yesReady noReady⟩
 
 private theorem enterSaturatedCall (variant : BuiltinSemanticsVariant) (stack : Stack)
     (env : Environment) (body first : Term) (rest : List Term) :
@@ -325,6 +413,32 @@ theorem eval_force_if_then_else_related (variant : BuiltinSemanticsVariant) (sta
       (stepN variant (n + 1) (.Eval s e (.Force (ifThenElseTerm cond (.Delay yes) (.Delay no)))))
       (stepN variant (m + 1) (.Eval t e' (ifThenElseTerm cond yes no))) :=
   ⟨7, 6, .eval (.delayedIf stacks envs yesReady noReady) envs (refl cond)⟩
+
+/-- Both forms start with the first argument. Each application on the
+source consumes a syntactic lambda until all packed fields are ready. -/
+theorem eval_apply_lambda_to_case_related (variant : BuiltinSemanticsVariant)
+    (stacks : StackRel R s t) (envs : EnvRel R .same e e') (bodies : R .same lhs rhs)
+    (refl : ∀ term, R .same term term) (first : Term) (rest : List Term) :
+    ∃ n m, StateRel R
+      (stepN variant (n + 1) (.Eval s e
+        (applyParams (lambdaPrefix (rest.length + 1) lhs) (first :: rest))))
+      (stepN variant (m + 1) (.Eval t e'
+        (.Case (.Constr 0 (first :: rest)) [lambdaPrefix (rest.length + 1) rhs]))) := by
+  refine ⟨(first :: rest).length + 1, 1, ?_⟩
+  rw [enterSaturatedCall]
+  exact .eval (.applicationCase (rest.length + 1) [] rest stacks envs envs bodies rfl)
+    envs (refl first)
+
+/-- Pack a conditional's arguments into one constructor. The condition
+is still evaluated first, and neither immediate arm can raise an error. -/
+theorem eval_apply_if_to_case_related (variant : BuiltinSemanticsVariant) (stacks : StackRel R s t)
+    (envs : EnvRel R .same e e') (refl : ∀ term, R .same term term) (cond yes no : Term)
+    (yesReady : immediateArm yes = true) (noReady : immediateArm no = true) :
+    ∃ n m, StateRel R
+      (stepN variant (n + 1) (.Eval s e (ifThenElseTerm cond yes no)))
+      (stepN variant (m + 1) (.Eval t e' (.Case (.Constr 0 [cond, yes, no])
+        [.Force (.Builtin .IfThenElse)]))) :=
+  ⟨6, 1, .eval (.packIf stacks envs yesReady noReady) envs (refl cond)⟩
 
 theorem eval_var_related (variant : BuiltinSemanticsVariant) (stacks : StackRel R s t)
     (envs : EnvRel R layout e e') (idx : Nat) :

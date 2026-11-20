@@ -5,7 +5,7 @@ namespace Tests.ForceIf
 open PlutusCore.UPLC.CekMachine PlutusCore.UPLC.CekValue PlutusCore.UPLC.Term
 open UplcOptimizer UplcOptimizer.Deep
 
-private def program : Term → Program := .Program (.Version 1 1 0)
+private def program : Term → Program := .Program (.Version 1 0 0)
 
 private def integer (value : Int) : Term := .Const (.Integer value)
 
@@ -92,11 +92,12 @@ private def foldedCondition : Term :=
 #guard optimizedBody foldedCondition == integer 17
 #guard (optimize (program foldedCondition)).2.byRule["forceIfThenElse_sound"]?.isNone
 
-private def sharedConditionals : Term :=
-  .Lam (.Constr 0 (List.replicate 5 (chooseDelayed (.Var 0) (integer 17) (integer 9))))
+private def sharedConditionals : Program :=
+  .Program (.Version 1 1 0)
+    (.Lam (.Constr 0 (List.replicate 5 (chooseDelayed (.Var 0) (integer 17) (integer 9)))))
 
-#guard (optimize (program sharedConditionals)).2.byRule["forceIfThenElse_sound"]? == some 5
-#guard (optimize (program sharedConditionals)).2.byRule["hoistPolyBuiltin_sound"]? == some 1
+#guard (optimize sharedConditionals).2.byRule["forceIfThenElse_sound"]? == some 5
+#guard (optimize sharedConditionals).2.byRule["hoistPolyBuiltin_sound"]? == some 1
 
 example : ProgramEquivalent (program nestedDelays) (optimize (program nestedDelays)).1 :=
   optimize_preserves (program nestedDelays)

@@ -28,4 +28,20 @@ def lambdaPrefix : Nat → Term → Term
   | 0, body => body
   | arity + 1, body => .Lam (lambdaPrefix arity body)
 
+/-- Peel a left-associated application into its function and ordered arguments. -/
+def applicationSpine (term : Term) (args : List Term := []) :
+    { spine : Term × List Term // applyParams spine.1 spine.2 = applyParams term args } :=
+  match term with
+  | .Apply fn arg => applicationSpine fn (arg :: args)
+  | term => ⟨(term, args), rfl⟩
+
+/-- Remove a known number of lambda binders, retaining their exact shape in
+    the witness. The remaining body may itself be a lambda. -/
+def lambdaBody? : (arity : Nat) → (term : Term) →
+    Option { body : Term // term = lambdaPrefix arity body }
+  | 0, term => some ⟨term, rfl⟩
+  | arity + 1, .Lam body => (lambdaBody? arity body).map fun found =>
+      ⟨found.val, congrArg Term.Lam found.property⟩
+  | _, _ => none
+
 end UplcOptimizer
